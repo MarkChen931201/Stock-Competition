@@ -1,0 +1,37 @@
+# Web / API
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+pydantic-settings==2.6.0
+python-dotenv==1.0.1
+
+# Data sources
+fugle-marketdata==1.0.4
+FinMind==1.7.7
+httpx==0.27.2
+aiohttp==3.10.10
+websockets==13.1
+
+# Numerics / TA
+pandas==2.2.3
+numpy==2.1.2
+ta==0.11.0
+scipy==1.14.1
+
+# Scheduling
+APScheduler==3.10.4
+pytz==2024.2
+
+# Notifier
+discord-webhook==1.3.1
+
+# Config / logs
+PyYAML==6.0.2
+loguru==0.7.2
+
+# Backtest
+vectorbt==0.26.2
+
+# Tests
+pytest==8.3.3
+pytest-asyncio==0.24.0

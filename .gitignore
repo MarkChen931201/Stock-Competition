@@ -1,0 +1,25 @@
+# Env / secrets
+.env
+.env.local
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs / data dumps
+logs/*.log
+data/cache/
+*.parquet
+*.csv
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
