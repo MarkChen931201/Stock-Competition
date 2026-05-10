@@ -103,8 +103,11 @@ def screen(
     cond_volume = df["avg_volume_lots"] >= settings.screener_min_avg_volume_lots
     cond_atr = df["atr_pct"] >= settings.screener_min_atr_pct
     if asset_type == "stock":
+        # 有週轉率資料才套門檻，取不到流通股數時不因此擋掉標的
+        has_turnover = df["turnover_rate"].notna()
         cond_turnover = (
-            df["turnover_rate"].fillna(0) >= settings.screener_min_turnover_rate
+            (~has_turnover) |
+            (df["turnover_rate"] >= settings.screener_min_turnover_rate)
         )
         passed = df[cond_volume & cond_atr & cond_turnover].copy()
     else:

@@ -59,27 +59,28 @@ class DiscordNotifier:
             )
             return self._send(embed)
 
-        # 依 score 由高到低取前 N 顯示
-        rows = []
-        rows.append(
-            f"`{'代號':<6}{'名稱':<8}{'收盤':>7}{'量(張)':>9}{'週轉':>7}{'ATR%':>7}{'分數':>7}`"
-        )
-        for c in candidates[:25]:
-            rows.append(
-                "`{sid:<6}{name:<8}{close:>7.2f}{vol:>9,.0f}{tr:>7.1%}{atr:>7.1%}{score:>7.2f}`".format(
-                    sid=c["stock_id"],
-                    name=(c.get("name") or "-")[:6],
-                    close=c["close"],
-                    vol=c["avg_volume_lots"],
-                    tr=c["turnover_rate"],
-                    atr=c["atr_pct"],
-                    score=c["score"],
-                )
+        # 依 score 由高到低，每 10 筆一個 field（Discord field 上限 1024 字元）
+        header = f"`{'代號':<6}{'名稱':<8}{'收盤':>8}{'量(張)':>9}{'ATR%':>7}{'分數':>7}`"
+
+        def _fmt_row(c: dict) -> str:
+            return "`{sid:<6}{name:<8}{close:>8.2f}{vol:>9,.0f}{atr:>7.1%}{score:>7.2f}`".format(
+                sid=c["stock_id"],
+                name=(c.get("name") or "-")[:6],
+                close=float(c["close"]),
+                vol=float(c["avg_volume_lots"]),
+                atr=float(c["atr_pct"]),
+                score=float(c["score"]),
             )
-        embed.add_embed_field(
-            name="今日候選池 (Top {})".format(min(len(candidates), 25)),
-            value="\n".join(rows),
-            inline=False,
-        )
+
+        top = candidates[:20]
+        for chunk_start in range(0, len(top), 10):
+            chunk = top[chunk_start: chunk_start + 10]
+            rows = [header] + [_fmt_row(c) for c in chunk]
+            embed.add_embed_field(
+                name=f"候選池 {chunk_start + 1}–{chunk_start + len(chunk)}",
+                value="\n".join(rows),
+                inline=False,
+            )
+
         embed.set_footer(text="Stock-Competition · prefetch_universe")
         return self._send(embed)
