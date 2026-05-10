@@ -4,6 +4,7 @@
   09:00        開市，啟動 Fugle WebSocket + TWSE 輪詢
   09:00–09:14  更新 ORB 區間（FugleClient 的 bar callback 會自動更新 cache）
   09:15        ORB 鎖定，ORBBreakoutStrategy 開始發訊號
+  09:30        推播全市場成交量 / 成交額 Top 20 排行榜
   09:00–13:20  每根 1分K 結束後呼叫三個策略
   13:20        收盤，停止接收新訊號
   13:25        關閉所有連線，推播今日統計摘要
@@ -118,12 +119,13 @@ class IntraDayScheduler:
         self._fugle.on_bar(self._on_bar)
         self._twse.on_orderbook(self._on_orderbook)
 
-        # 並行跑 Fugle WS + TWSE 輪詢 + 收盤監控
+        # 並行跑 Fugle WS + TWSE 輪詢 + 收盤監控 + 09:30 排行榜
         try:
             await asyncio.gather(
                 self._fugle.run(),
                 self._twse.run(),
                 self._closing_monitor(),
+                self._morning_ranking_task(),
             )
         except asyncio.CancelledError:
             logger.info("Scheduler 收到取消訊號，開始關閉…")
@@ -167,6 +169,21 @@ class IntraDayScheduler:
         self._obi.on_orderbook(book)
 
     # --- 收盤監控 ---
+
+    async def _morning_ranking_task(self) -> None:
+        """等到 09:30 推播全市場早盤排行榜。"""
+        now = datetime.now()
+        target = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        if now < target:
+            wait_sec = (target - now).total_seconds()
+            logger.info(f"早盤排行榜將於 09:30 推播，剩 {wait_sec:.0f} 秒")
+            await asyncio.sleep(wait_sec)
+
+        try:
+            from scripts.morning_ranking import run as ranking_run
+            await ranking_run(top_n=20)
+        except Exception as e:
+            logger.exception(f"早盤排行榜失敗：{e}")
 
     async def _closing_monitor(self) -> None:
         """每分鐘檢查是否到 13:25，到了就關閉所有連線。"""
