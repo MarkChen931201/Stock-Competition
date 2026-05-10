@@ -1,12 +1,10 @@
-"""TWSE 早盤排行榜 — 查詢全市場（或指定清單）累計成交量與成交額。
+"""TWSE 早盤排行榜 — 查詢全市場累計成交量、成交額、振幅。
 
-資料來源：TWSE getStockInfo API（支援一次批次查多檔，用 | 分隔）
-查詢時機：09:30，取當日累計成交量（張）與成交額（千元）。
-
-欄位說明（TWSE API）：
-  c  = 股票代號        n  = 股票名稱
-  v  = 累計成交量（股）z  = 最新成交價
-  tv = 最新單筆成交量  tlong = 累計成交額（元）
+資料來源：TWSE getStockInfo API
+欄位說明：
+  c  = 代號  n  = 名稱  z  = 最新成交價
+  v  = 累計成交量（股）  tlong = 累計成交額（元）
+  h  = 當日最高  l  = 當日最低  y  = 昨收
 """
 from __future__ import annotations
 
@@ -22,7 +20,7 @@ _HEADERS = {
     "Referer": "https://mis.twse.com.tw/",
     "User-Agent": "Mozilla/5.0",
 }
-_BATCH_SIZE = 50   # 每次查幾檔（太大容易被擋）
+_BATCH_SIZE = 50
 
 
 @dataclass
@@ -30,98 +28,103 @@ class StockSnapshot:
     symbol: str
     name: str
     last_price: float
+    prev_close: float     # 昨收價
+    high: float           # 今日最高
+    low: float            # 今日最低
     volume_lots: float    # 累計成交量（張）
     turnover_k: float     # 累計成交額（千元）
 
     @property
     def turnover_m(self) -> float:
-        """成交額（百萬元）。"""
         return self.turnover_k / 1000
+
+    @property
+    def amplitude_pct(self) -> float:
+        """振幅 = (今日最高 - 今日最低) / 昨收，昨收為 0 時回傳 0。"""
+        if self.prev_close <= 0:
+            return 0.0
+        return (self.high - self.low) / self.prev_close
 
 
 async def fetch_ranking(
     symbols: list[str],
-    top_n: int = 20,
+    top_n: int = 30,
     timeout: float = 8.0,
-) -> tuple[list[StockSnapshot], list[StockSnapshot]]:
-    """查詢所有標的的當日累計成交量與成交額，回傳排行榜。
-
-    Args:
-        symbols:  股票代號清單（純數字，不含 .tw）
-        top_n:    各排行取前幾名
-        timeout:  單次 HTTP 請求逾時秒數
+) -> tuple[list[StockSnapshot], list[StockSnapshot], list[StockSnapshot]]:
+    """查詢全市場即時資料，回傳三種排行榜。
 
     Returns:
-        (volume_ranking, turnover_ranking)
-        volume_ranking   依成交量由大到小
-        turnover_ranking 依成交額由大到小
+        (volume_ranking, turnover_ranking, amplitude_ranking)
     """
-    snapshots: list[StockSnapshot] = []
+    # 用 dict 去重，同一代號只保留最新一筆
+    seen: dict[str, StockSnapshot] = {}
 
     async with httpx.AsyncClient(headers=_HEADERS, timeout=timeout) as http:
-        # 分批查詢
         for i in range(0, len(symbols), _BATCH_SIZE):
             batch = symbols[i: i + _BATCH_SIZE]
             ex_ch = "|".join(f"tse_{s}.tw" for s in batch)
-            for attempt in range(2):   # 最多重試 1 次
+
+            for attempt in range(2):
                 try:
                     resp = await http.get(
                         _TWSE_API,
                         params={"ex_ch": ex_ch, "json": "1", "delay": "0"},
                     )
                     resp.raise_for_status()
-                    data = resp.json()
-                    for item in data.get("msgArray", []):
+                    for item in resp.json().get("msgArray", []):
                         snap = _parse(item)
                         if snap:
-                            snapshots.append(snap)
-                    break   # 成功就跳出重試
+                            # 同代號取成交量較大者（避免重複時用舊資料蓋掉新資料）
+                            existing = seen.get(snap.symbol)
+                            if existing is None or snap.volume_lots >= existing.volume_lots:
+                                seen[snap.symbol] = snap
+                    break
                 except Exception as e:
                     if attempt == 0:
-                        logger.debug(f"TWSE batch {i} 第一次失敗，重試：{e}")
+                        logger.debug(f"TWSE batch {i} 重試：{e}")
                         await asyncio.sleep(1.0)
                     else:
-                        logger.warning(f"TWSE batch {i}–{i+_BATCH_SIZE} 查詢失敗：{e}")
-            # 避免過快打 TWSE，每批間隔 0.4 秒
+                        logger.warning(f"TWSE batch {i}–{i+_BATCH_SIZE} 失敗：{e}")
+
             await asyncio.sleep(0.4)
 
+    snapshots = list(seen.values())
     if not snapshots:
-        return [], []
+        return [], [], []
 
-    vol_rank = sorted(snapshots, key=lambda s: s.volume_lots, reverse=True)[:top_n]
-    turn_rank = sorted(snapshots, key=lambda s: s.turnover_k, reverse=True)[:top_n]
-    return vol_rank, turn_rank
+    vol_rank   = sorted(snapshots, key=lambda s: s.volume_lots,    reverse=True)[:top_n]
+    turn_rank  = sorted(snapshots, key=lambda s: s.turnover_k,     reverse=True)[:top_n]
+    amp_rank   = sorted(snapshots, key=lambda s: s.amplitude_pct,  reverse=True)[:top_n]
+    return vol_rank, turn_rank, amp_rank
 
 
 def _parse(item: dict) -> StockSnapshot | None:
     try:
         symbol = item.get("c", "").strip()
-        name = item.get("n", "").strip()
+        name   = item.get("n", "").strip()
         if not symbol:
             return None
 
-        z = item.get("z", "-")
-        last_price = float(z) if z and z != "-" else 0.0
+        def _f(key: str) -> float:
+            v = item.get(key, "-")
+            return float(v) if v and v not in ("-", "") else 0.0
 
-        # 累計成交量（股）→ 張
-        v = item.get("v", "0")
-        volume_lots = float(v) / 1000 if v and v != "-" else 0.0
+        last_price  = _f("z")
+        prev_close  = _f("y")
+        high        = _f("h")
+        low         = _f("l")
+        volume_lots = _f("v") / 1000          # 股 → 張
+        turnover_k  = _f("tlong") / 1000      # 元 → 千元
 
-        # 累計成交額（元）→ 千元
-        tlong = item.get("tlong", "0")
-        turnover_k = float(tlong) / 1000 if tlong and tlong != "-" else 0.0
-
-        # 過濾無效資料（開盤前成交量為 0）
         if volume_lots <= 0:
             return None
 
         return StockSnapshot(
-            symbol=symbol,
-            name=name,
-            last_price=last_price,
-            volume_lots=volume_lots,
-            turnover_k=turnover_k,
+            symbol=symbol, name=name,
+            last_price=last_price, prev_close=prev_close,
+            high=high, low=low,
+            volume_lots=volume_lots, turnover_k=turnover_k,
         )
     except Exception as e:
-        logger.debug(f"parse 失敗：{e}，item={item}")
+        logger.debug(f"parse 失敗：{e}")
         return None
