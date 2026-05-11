@@ -95,7 +95,8 @@ class IntraDayScheduler:
         self._trailing = TrailingStopManager(notifier=self._notifier)
         # 籌碼面資料（盤前載入昨日）
         self._inst = InstitutionalLoader(token=settings.finmind_token)
-        self._scorer = SignalScorer(inst_loader=self._inst, min_score=4.0)
+        # 評分系統升級至 7 維度滿分 14，門檻 6.0（約 43%）
+        self._scorer = SignalScorer(inst_loader=self._inst, min_score=6.0, cache=self.cache)
         self._dispatcher = SignalDispatcher(
             notifier=self._notifier,
             min_profit_pct=0.008,

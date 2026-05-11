@@ -1,20 +1,25 @@
 """訊號品質評分器 — 多維度評估每個訊號，過濾低分訊號。
 
-評分維度（滿分 10 分）：
-  1. 籌碼面（外資+投信方向）：0~2 分
+評分維度（滿分 14 分）：
+  1. 籌碼面（外資+投信方向）  ：0~2 分
   2. ORB 寬度                ：0~2 分（越寬越好）
   3. 量比                    ：0~2 分（越大越好）
   4. 大盤順向                ：0~2 分（同向加分）
   5. 時段                    ：0~2 分（早盤最高分）
+  6. 內外盤比（uptick ratio）：0~2 分 ✨新增
+  7. 加權 OBI（買賣壓力）    ：0~2 分 ✨新增
 
-  評分 ≥ min_score（預設 4.0）才推播，低分直接 REJECT。
+  評分 ≥ min_score（預設 6.0 / 14）才推播，低分直接 REJECT。
 
-這樣即使個別條件剛好通過，但綜合分數不夠就不推播，
-大幅提升訊號品質。
+優先順序原則：
+  - 籌碼、量比、內外盤比 = 「實際成交方向」最重要
+  - ORB 寬度、大盤順向、時段 = 「背景條件」中等重要
+  - 加權 OBI = 「即將成交方向」次要
+
+OrderBook 資料由 dispatcher 在 submit 時注入（透過 cache）。
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -27,20 +32,23 @@ class SignalScorer:
 
     Args:
         inst_loader:  InstitutionalLoader 實例（無法取得時可傳 None）
-        min_score:    最低推播門檻（滿分 10，預設 4.0）
+        min_score:    最低推播門檻（滿分 14，預設 6.0）
+        cache:        IntraDayCache 實例（用於讀取 OrderBook，可選）
     """
 
     def __init__(
         self,
         inst_loader: "InstitutionalLoader | None" = None,
-        min_score: float = 4.0,
+        min_score: float = 6.0,
+        cache=None,
     ):
         self._inst = inst_loader
         self._min_score = min_score
+        self._cache = cache
 
     def score(self, signal: "Signal") -> tuple[float, dict]:
         """計算訊號分數，回傳 (總分, 各維度明細)。"""
-        from src.strategies.base import Direction, SignalType
+        from src.strategies.base import Direction
 
         extra = signal.extra or {}
         breakdown = {}
@@ -55,11 +63,11 @@ class SignalScorer:
             chip_score = 2.0 if abs(chip_score_raw) > 0.3 and direction_match \
                          else (1.0 if direction_match else 0.0)
         else:
-            chip_score = 1.0   # 無資料給中性分
+            chip_score = 1.0
         breakdown["籌碼"] = chip_score
 
         # ── 2. ORB 寬度（0~2 分）──
-        orb_w = extra.get("orb_width_pct", 0.0)   # 單位 %
+        orb_w = extra.get("orb_width_pct", 0.0)
         if orb_w >= 3.0:
             orb_score = 2.0
         elif orb_w >= 1.5:
@@ -67,25 +75,20 @@ class SignalScorer:
         elif orb_w >= 0.8:
             orb_score = 1.0
         else:
-            orb_score = 0.0   # 太窄（但已被 min_orb_pct 過濾，基本不會到這裡）
-        breakdown["ORB寬度"] = orb_score
+            orb_score = 0.0
+        breakdown["ORB"] = orb_score
 
         # ── 3. 量比（0~2 分）──
         vol_r = extra.get("volume_ratio", 0.0)
-        if vol_r >= 3.0:
-            vol_score = 2.0
-        elif vol_r >= 2.0:
-            vol_score = 1.5
-        elif vol_r >= 1.5:
-            vol_score = 1.0
-        elif vol_r >= 1.0:
-            vol_score = 0.5
-        else:
-            vol_score = 0.0
+        if vol_r >= 3.0:    vol_score = 2.0
+        elif vol_r >= 2.0:  vol_score = 1.5
+        elif vol_r >= 1.5:  vol_score = 1.0
+        elif vol_r >= 1.0:  vol_score = 0.5
+        else:               vol_score = 0.0
         breakdown["量比"] = vol_score
 
         # ── 4. 大盤順向（0~2 分）──
-        mkt_chg = extra.get("market_change_pct", 0.0)   # 單位 %
+        mkt_chg = extra.get("market_change_pct", 0.0)
         mkt_same_dir = (
             (signal.direction == Direction.LONG  and mkt_chg >= 0) or
             (signal.direction == Direction.SHORT and mkt_chg <= 0)
@@ -96,22 +99,56 @@ class SignalScorer:
             mkt_score = 1.0
         else:
             mkt_score = 0.0
-        breakdown["大盤順向"] = mkt_score
+        breakdown["大盤"] = mkt_score
 
         # ── 5. 時段（0~2 分）──
-        now = signal.generated_at
-        hour = now.hour
-        minute = now.minute
-        open_min = (hour - 9) * 60 + minute
-        if 15 <= open_min <= 45:       # 09:15–09:45 黃金時段
-            time_score = 2.0
-        elif 45 < open_min <= 90:      # 09:45–10:30
-            time_score = 1.5
-        elif 90 < open_min <= 120:     # 10:30–11:00
-            time_score = 1.0
-        else:
-            time_score = 0.5
+        open_min = (signal.generated_at.hour - 9) * 60 + signal.generated_at.minute
+        if 15 <= open_min <= 45:       time_score = 2.0
+        elif 45 < open_min <= 90:      time_score = 1.5
+        elif 90 < open_min <= 120:     time_score = 1.0
+        else:                          time_score = 0.5
         breakdown["時段"] = time_score
+
+        # ── 6. 內外盤比（0~2 分）── ✨新增
+        uptick = extra.get("uptick_ratio", 50.0)  # 預設 50（中性）
+        if signal.direction == Direction.LONG:
+            # 做多：外盤比越高越好
+            if uptick >= 60:     uptick_score = 2.0   # 🔥 強買壓
+            elif uptick >= 55:   uptick_score = 1.5
+            elif uptick >= 50:   uptick_score = 1.0
+            elif uptick >= 47:   uptick_score = 0.5
+            else:                uptick_score = 0.0
+        else:
+            # 做空：外盤比越低越好
+            if uptick <= 40:     uptick_score = 2.0   # ❄️ 強賣壓
+            elif uptick <= 45:   uptick_score = 1.5
+            elif uptick <= 50:   uptick_score = 1.0
+            elif uptick <= 53:   uptick_score = 0.5
+            else:                uptick_score = 0.0
+        breakdown["內外盤"] = uptick_score
+
+        # ── 7. 加權 OBI（0~2 分）── ✨新增
+        # 從 cache 讀取最新 OrderBook（如有）
+        w_obi = 0.0
+        blr = 0.5
+        if self._cache is not None:
+            book = self._cache.get_last_book(signal.symbol)
+            if book is not None:
+                w_obi = book.weighted_obi
+                blr = book.best_level_ratio
+
+        if signal.direction == Direction.LONG:
+            # 做多：加權 OBI 越正越好，買一壓力比越高越好
+            obi_score = 0.0
+            if w_obi >= 0.3 and blr >= 0.6:     obi_score = 2.0   # 強雙重買壓
+            elif w_obi >= 0.15 or blr >= 0.55:  obi_score = 1.0
+            elif w_obi >= 0:                    obi_score = 0.5
+        else:
+            obi_score = 0.0
+            if w_obi <= -0.3 and blr <= 0.4:    obi_score = 2.0
+            elif w_obi <= -0.15 or blr <= 0.45: obi_score = 1.0
+            elif w_obi <= 0:                    obi_score = 0.5
+        breakdown["加權OBI"] = obi_score
 
         total = sum(breakdown.values())
         return total, breakdown
