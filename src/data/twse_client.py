@@ -45,7 +45,8 @@ class OrderBook:
     ask_volumes: list[int] = field(default_factory=list)
 
     last_price: float = 0.0
-    total_volume_lots: int = 0  # 今日累計成交量（張）
+    total_volume_lots: int = 0        # 今日累計成交量（張）
+    uptick_ratio: float = 0.5         # 內外盤比（外盤量/總量），0.5 = 無資料
 
     @property
     def obi(self) -> float:

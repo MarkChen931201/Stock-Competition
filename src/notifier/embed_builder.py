@@ -104,6 +104,21 @@ def build_signal_embed(
         inline=False,
     )
 
+    # --- 內外盤比（若有）---
+    uptick = signal.extra.get("uptick_ratio") if signal.extra else None
+    if uptick is not None:
+        if uptick >= 55:
+            pressure = f"🔥 強買壓（外盤 {uptick:.1f}%）"
+        elif uptick >= 50:
+            pressure = f"📈 偏買壓（外盤 {uptick:.1f}%）"
+        elif uptick <= 40:
+            pressure = f"❄️ 強賣壓（外盤 {uptick:.1f}%）"
+        elif uptick <= 45:
+            pressure = f"📉 偏賣壓（外盤 {uptick:.1f}%）"
+        else:
+            pressure = f"↔️ 均衡（外盤 {uptick:.1f}%）"
+        embed.add_embed_field(name="⚖️ 買賣壓", value=pressure, inline=True)
+
     # --- 訊號觸發原因 ---
     if signal.reason:
         embed.add_embed_field(

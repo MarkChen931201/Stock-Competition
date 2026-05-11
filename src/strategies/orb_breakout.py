@@ -132,21 +132,27 @@ class ORBBreakoutStrategy(BaseStrategy):
 
         fired_directions = self._fired.setdefault(symbol, set())
 
-        # ── 今日累計量動能：開盤至今的總量應超過 ORB 均量 × bars數量（代表量能持續）
+        # ── 今日累計量動能 ──
         total_vol_today = sum(b.volume for b in all_bars)
         avg_bar_vol = self.cache.get_recent_volume(symbol, n_bars=20)
-        # 今日累計量 > 同期均量 × 1.2 → 今天是活躍日
         n_bars_so_far = len(all_bars)
         is_active_day = (avg_bar_vol == 0) or (total_vol_today >= avg_bar_vol * n_bars_so_far * 0.8)
+
+        # ── 內外盤比（外盤比）：確認主動買賣方向 ──
+        book = self.cache.get_last_book(symbol)
+        uptick = book.uptick_ratio if book else 0.5
+        uptick_long_min:  float = self._param("uptick_long_min", 0.47)
+        uptick_short_max: float = self._param("uptick_short_max", 0.53)
 
         # ===== 多單條件 =====
         long_cond = (
             allow_long
             and close > orb.high
             and current_vol >= avg_orb_vol * volume_ratio
-            and is_active_day                             # 今天量能不能太差
+            and is_active_day
             and rsi is not None and rsi_low <= rsi <= rsi_high
             and stock_rs >= market_rs
+            and uptick >= uptick_long_min           # 外盤比不能太低（賣壓太重不做多）
             and Direction.LONG not in fired_directions
         )
 
@@ -163,13 +169,14 @@ class ORBBreakoutStrategy(BaseStrategy):
                 reason=(
                     f"突破 OR {orb.high}｜寬度 {orb_width_pct:.1%}｜"
                     f"量比 {current_vol/avg_orb_vol:.1f}x｜RSI={rsi}｜"
-                    f"大盤 {mkt_change:+.2%}"
+                    f"外盤比 {uptick:.1%}｜大盤 {mkt_change:+.2%}"
                 ),
                 extra={
                     "orb_high": orb.high, "orb_low": orb.low,
                     "orb_width_pct": round(orb_width_pct * 100, 2),
                     "volume_ratio": round(current_vol / avg_orb_vol, 2),
                     "rsi": rsi,
+                    "uptick_ratio": round(uptick * 100, 1),
                     "market_change_pct": round(mkt_change * 100, 2),
                     "stock_rs_pct": round(stock_rs * 100, 2),
                 },
@@ -183,6 +190,7 @@ class ORBBreakoutStrategy(BaseStrategy):
             and is_active_day
             and rsi is not None and (100 - rsi_high) <= rsi <= (100 - rsi_low)
             and stock_rs <= market_rs
+            and uptick <= uptick_short_max          # 外盤比不能太高（買壓太強不做空）
             and Direction.SHORT not in fired_directions
         )
 
@@ -199,13 +207,14 @@ class ORBBreakoutStrategy(BaseStrategy):
                 reason=(
                     f"跌破 OR {orb.low}｜寬度 {orb_width_pct:.1%}｜"
                     f"量比 {current_vol/avg_orb_vol:.1f}x｜RSI={rsi}｜"
-                    f"大盤 {mkt_change:+.2%}"
+                    f"外盤比 {uptick:.1%}｜大盤 {mkt_change:+.2%}"
                 ),
                 extra={
                     "orb_high": orb.high, "orb_low": orb.low,
                     "orb_width_pct": round(orb_width_pct * 100, 2),
                     "volume_ratio": round(current_vol / avg_orb_vol, 2),
                     "rsi": rsi,
+                    "uptick_ratio": round(uptick * 100, 1),
                     "market_change_pct": round(mkt_change * 100, 2),
                     "stock_rs_pct": round(stock_rs * 100, 2),
                 },

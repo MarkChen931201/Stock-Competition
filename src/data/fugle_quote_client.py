@@ -34,16 +34,41 @@ class FugleQuote:
     ask_sizes: list[int]    = field(default_factory=list)
 
     # 累計成交
-    trade_volume: int   = 0    # 張
-    trade_value: float  = 0.0  # 元
+    trade_volume: int        = 0      # 張（總）
+    trade_value: float       = 0.0   # 元
+    trade_vol_at_bid: int    = 0      # 內盤量（主動賣，成交在買價）
+    trade_vol_at_ask: int    = 0      # 外盤量（主動買，成交在賣價）
 
     @property
     def obi(self) -> float:
-        """Order Book Imbalance = (買量 - 賣量) / (買量 + 賣量)。"""
+        """委買委賣比 = (委買量 - 委賣量) / (委買量 + 委賣量)。
+        基於五檔委託簿，反映市場「意圖」。
+        """
         total_bid = sum(self.bid_sizes)
         total_ask = sum(self.ask_sizes)
         total = total_bid + total_ask
         return (total_bid - total_ask) / total if total else 0.0
+
+    @property
+    def uptick_ratio(self) -> float:
+        """內外盤比（外盤比）= 外盤量 / (外盤量 + 內盤量)。
+        基於實際成交方向，反映市場「現實」買壓。
+        > 0.55 = 主動買方強勢（外盤多），適合做多
+        < 0.45 = 主動賣方強勢（內盤多），適合做空
+        0.45~0.55 = 多空均衡
+        """
+        total = self.trade_vol_at_bid + self.trade_vol_at_ask
+        return self.trade_vol_at_ask / total if total else 0.5
+
+    @property
+    def buy_sell_pressure(self) -> str:
+        """買賣壓判斷（人類可讀）。"""
+        r = self.uptick_ratio
+        if r >= 0.6:   return "強買壓 🔥"
+        if r >= 0.55:  return "偏買壓 📈"
+        if r <= 0.4:   return "強賣壓 ❄️"
+        if r <= 0.45:  return "偏賣壓 📉"
+        return "均衡 ↔️"
 
     @property
     def best_bid(self) -> float:
@@ -136,8 +161,10 @@ def _parse(raw: dict) -> FugleQuote | None:
         ask_sizes  = [int(a["size"])   for a in asks]
 
         total = raw.get("total", {})
-        trade_volume = int(total.get("tradeVolume") or 0)
-        trade_value  = float(total.get("tradeValue") or 0)
+        trade_volume     = int(total.get("tradeVolume")      or 0)
+        trade_value      = float(total.get("tradeValue")     or 0)
+        trade_vol_at_bid = int(total.get("tradeVolumeAtBid") or 0)  # 內盤量
+        trade_vol_at_ask = int(total.get("tradeVolumeAtAsk") or 0)  # 外盤量
 
         return FugleQuote(
             symbol=symbol, name=name,
@@ -147,6 +174,8 @@ def _parse(raw: dict) -> FugleQuote | None:
             bid_prices=bid_prices, bid_sizes=bid_sizes,
             ask_prices=ask_prices, ask_sizes=ask_sizes,
             trade_volume=trade_volume, trade_value=trade_value,
+            trade_vol_at_bid=trade_vol_at_bid,
+            trade_vol_at_ask=trade_vol_at_ask,
         )
     except Exception as e:
         logger.debug(f"FugleQuote parse 失敗：{e}")

@@ -211,6 +211,7 @@ class IntraDayScheduler:
             ask_volumes=quote.ask_sizes,
             last_price=quote.last_price,
             total_volume_lots=quote.trade_volume,
+            uptick_ratio=quote.uptick_ratio,   # 內外盤比
         )
         self.cache.update_orderbook(book)
         self._obi.on_orderbook(book)
