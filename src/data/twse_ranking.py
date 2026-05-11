@@ -109,15 +109,30 @@ def _parse(item: dict) -> StockSnapshot | None:
             v = item.get(key, "-")
             return float(v) if v and v not in ("-", "") else 0.0
 
-        last_price  = _f("z")
+        # TWSE getStockInfo 欄位說明（實測確認）：
+        # z = 最新成交價（撮合中可能為 "-"，fallback 用 o 開盤價）
+        # y = 昨收價
+        # h = 今日最高, l = 今日最低
+        # v = 累計成交量，單位「張」（= 千股），不需再除 1000
+        # tlong = 最後更新的 Unix 時間戳（毫秒），非成交額，不可使用
+        # 成交額需自行估算：volume_lots × last_price（元/張）
+
+        raw_z = item.get("z", "-")
+        raw_o = item.get("o", "-")
+        last_price = _f("z") if raw_z not in ("-", "") else _f("o")
+
         prev_close  = _f("y")
         high        = _f("h")
         low         = _f("l")
-        volume_lots = _f("v") / 1000          # 股 → 張
-        turnover_k  = _f("tlong") / 1000      # 元 → 千元
+        volume_lots = _f("v")          # 已是張，不需除以 1000
 
         if volume_lots <= 0:
             return None
+
+        # 成交額估算（元）= 張數 × 每張股數 × 參考價
+        ref_price   = last_price if last_price > 0 else prev_close
+        turnover_k  = volume_lots * ref_price * 1000 / 1000  # → 千元
+        # 即 volume_lots * ref_price（因為 1張=1000股，千元/1000=元，消掉）
 
         return StockSnapshot(
             symbol=symbol, name=name,
