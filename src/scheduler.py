@@ -25,6 +25,7 @@ from src.data.fugle_client import Bar, FugleWebSocketClient, Tick
 from src.data.fugle_quote_client import FugleQuote, FugleQuoteClient
 from src.data.twse_client import OrderBook
 from src.data.broad_scanner import BroadScanner, load_all_twse_symbols
+from src.risk.trailing_stop import TrailingStopManager
 from src.notifier.discord_bot import DiscordNotifier
 from src.signals.dispatcher import SignalDispatcher
 from src.strategies.base import Signal
@@ -88,10 +89,12 @@ class IntraDayScheduler:
         self._fugle = FugleWebSocketClient(api_key=settings.fugle_api_key)
         self._quote = FugleQuoteClient(api_key=settings.fugle_api_key, poll_interval=30.0)
         self._notifier = DiscordNotifier(webhook_url=settings.discord_webhook_url)
+        self._trailing = TrailingStopManager(notifier=self._notifier)
         self._dispatcher = SignalDispatcher(
             notifier=self._notifier,
             min_profit_pct=0.008,
             cooldown_minutes=5,
+            trailing_stop_manager=self._trailing,
         )
 
         # --- 三個策略（共享同一個 cache）---
@@ -158,6 +161,9 @@ class IntraDayScheduler:
 
     async def _on_bar(self, bar: Bar) -> None:
         self.cache.update_bar(bar)
+
+        # Trailing Stop 更新（無論是否收盤都要檢查，確保出場提醒不漏）
+        self._trailing.update(bar)
 
         if self._signal_stopped:
             return

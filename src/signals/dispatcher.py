@@ -16,7 +16,7 @@ from src.notifier.discord_bot import DiscordNotifier
 from src.notifier.embed_builder import build_signal_embed
 from src.risk.cost_calculator import AssetType, calc_round_trip_cost
 from src.signals.dedup import SignalDedup
-from src.strategies.base import Signal, SignalType
+from src.strategies.base import Signal, SignalType, Direction
 
 # 判斷是否為 ETF 的代號前綴 / 後綴（台股 ETF 代號通常以 0 開頭或含英文）
 _ETF_PREFIXES = ("00", "0050", "0056")
@@ -45,11 +45,13 @@ class SignalDispatcher:
         min_profit_pct: float = 0.008,
         cooldown_minutes: int = 5,
         default_lots: int = 1,
+        trailing_stop_manager=None,   # TrailingStopManager（可選）
     ):
         self._notifier = notifier
         self._min_profit_pct = min_profit_pct
         self._default_lots = default_lots
         self._dedup = SignalDedup(cooldown_minutes=cooldown_minutes)
+        self._trailing = trailing_stop_manager
 
         # 統計：今日推播次數
         self._sent_count = 0
@@ -144,6 +146,17 @@ class SignalDispatcher:
                 f"{signal.direction.value} {signal.signal_type.value} "
                 f"@ {signal.trigger_price} | {signal.strategy_name}"
             )
+            # ENTRY 訊號成功推播後，自動登記至 Trailing Stop 管理器
+            if signal.signal_type == SignalType.ENTRY and self._trailing is not None:
+                breakeven_pct = 0.00385 if asset_type == AssetType.ETF else 0.0043
+                self._trailing.add_position(
+                    symbol=signal.symbol,
+                    name=signal.name,
+                    direction=signal.direction,
+                    entry_price=signal.trigger_price,
+                    initial_stop=signal.stop_loss,
+                    breakeven_cost_pct=breakeven_pct,
+                )
         else:
             logger.warning(f"[{signal.symbol}] Discord 推播失敗")
 
