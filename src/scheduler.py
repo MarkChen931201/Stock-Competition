@@ -85,7 +85,7 @@ class IntraDayScheduler:
 
         # --- 初始化各元件 ---
         self._fugle = FugleWebSocketClient(api_key=settings.fugle_api_key)
-        self._quote = FugleQuoteClient(api_key=settings.fugle_api_key, poll_interval=3.0)
+        self._quote = FugleQuoteClient(api_key=settings.fugle_api_key, poll_interval=30.0)
         self._notifier = DiscordNotifier(webhook_url=settings.discord_webhook_url)
         self._dispatcher = SignalDispatcher(
             notifier=self._notifier,
@@ -118,8 +118,9 @@ class IntraDayScheduler:
         self._fugle.add_symbols(fugle_symbols)
         logger.info(f"Fugle WebSocket 訂閱（tick）：{fugle_symbols}")
 
-        # Fugle Quote 輪詢全部 30 檔（五檔委買委賣 + OBI，無訂閱上限）
-        self._quote.add_symbols(self.symbols)
+        # Fugle Quote 輪詢前 10 核心檔（OBI/五檔），每檔間 1s，間隔 30s
+        # 10 檔 × 2 次/分 = 20 req/min → 安全
+        self._quote.add_symbols(self.symbols[:10])
 
         # 掛上 callback
         self._fugle.on_tick(self._on_tick)
@@ -188,29 +189,62 @@ class IntraDayScheduler:
     # --- 收盤監控 ---
 
     async def _bar_polling_loop(self) -> None:
-        """每 60 秒用 Fugle REST API 拉一次所有標的的最新 1分K，注入 cache。
-        補足 WebSocket candles 訂閱被上限擋掉的缺口。
+        """啟動時補抓今日全部歷史 K 棒（重建 ORB/VWAP），之後每 90 秒更新最新一根。
+        30 檔 × 1s/檔 + 60s 等待 = 90s 週期 ≈ 20 req/min → 安全範圍。
         """
         from fugle_marketdata import RestClient as FugleRestClient
+        from src.data.fugle_client import Bar
         rest = FugleRestClient(api_key=settings.fugle_api_key)
 
+        # ── 第一步：補抓今日所有歷史 K 棒（重建 ORB 區間和 VWAP 狀態）──
+        logger.info("補抓今日歷史 1分K，重建 ORB/VWAP 狀態…")
+        for symbol in self.symbols:
+            try:
+                data = rest.stock.intraday.candles(symbol=symbol, timeframe="1")
+                candles = data.get("data", [])
+                for c in candles:
+                    ts = datetime.fromisoformat(c["date"])
+                    bar = Bar(
+                        symbol=symbol,
+                        open=float(c.get("open", 0)),
+                        high=float(c.get("high", 0)),
+                        low=float(c.get("low", 0)),
+                        close=float(c.get("close", 0)),
+                        volume=int(c.get("volume", 0)),
+                        timestamp=ts,
+                    )
+                    self.cache.update_bar(bar)
+            except Exception as e:
+                logger.warning(f"[{symbol}] 歷史 K 棒補抓失敗：{e}")
+            await asyncio.sleep(1.0)
+
+        logger.info(f"歷史 K 棒補抓完成，ORB 狀態範例：" +
+                    f"2303 high={self.cache.get_orb('2303').high} " +
+                    f"low={self.cache.get_orb('2303').low} " +
+                    f"locked={self.cache.get_orb('2303').locked}")
+
+        # 初始化完成後立即跑一次策略
+        for symbol in self.symbols:
+            bar = self.cache.get_last_bar(symbol)
+            if bar:
+                await self._on_bar(bar)
+
         while True:
-            await asyncio.sleep(60)
             now = datetime.now()
             if (now.hour, now.minute) >= (_SIGNAL_CUTOFF_HOUR, _SIGNAL_CUTOFF_MINUTE):
                 break
+
+            updated = 0
             for symbol in self.symbols:
                 try:
-                    data = rest.stock.intraday.candles(
-                        symbol=symbol, timeframe="1"
-                    )
+                    data = rest.stock.intraday.candles(symbol=symbol, timeframe="1")
                     candles = data.get("data", [])
                     if not candles:
+                        await asyncio.sleep(1.0)
                         continue
                     latest = candles[-1]
                     ts_str = latest.get("date", "")
-                    ts = datetime.fromisoformat(ts_str) if ts_str else now
-                    from src.data.fugle_client import Bar
+                    ts = datetime.fromisoformat(ts_str) if ts_str else datetime.now()
                     bar = Bar(
                         symbol=symbol,
                         open=float(latest.get("open", 0)),
@@ -221,9 +255,21 @@ class IntraDayScheduler:
                         timestamp=ts,
                     )
                     self.cache.update_bar(bar)
+                    updated += 1
                 except Exception as e:
-                    logger.debug(f"[{symbol}] REST candle 查詢失敗：{e}")
-            logger.debug("1分K REST 輪詢完成")
+                    logger.debug(f"[{symbol}] candle 查詢失敗：{e}")
+                await asyncio.sleep(1.0)   # 每檔間隔 1 秒
+
+            logger.info(f"1分K 更新完成：{updated}/{len(self.symbols)} 檔")
+
+            # 觸發一次策略判斷（用最後一批 bar）
+            for symbol in self.symbols:
+                bar = self.cache.get_last_bar(symbol)
+                if bar:
+                    await self._on_bar(bar)
+
+            # 等到下一輪（60 秒後）
+            await asyncio.sleep(60)
 
     async def _morning_ranking_task(self) -> None:
         """等到 09:30 推播全市場早盤排行榜（啟動後至少等 30 秒讓 TWSE 穩定）。"""

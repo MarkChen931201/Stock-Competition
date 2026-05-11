@@ -90,10 +90,12 @@ class FugleQuoteClient:
 
     async def run(self) -> None:
         self._running = True
-        logger.info(f"Fugle Quote 輪詢啟動，間隔 {self._poll_interval}s，共 {len(self._symbols)} 檔")
+        logger.info(f"Fugle Quote 輪詢啟動，間隔 {self._poll_interval}s，共 {len(self._symbols)} 檔，每檔間隔 1s")
         while self._running:
             try:
                 for symbol in self._symbols:
+                    if not self._running:
+                        break
                     try:
                         raw = await asyncio.get_event_loop().run_in_executor(
                             None, lambda s=symbol: self._rest.stock.intraday.quote(symbol=s)
@@ -104,7 +106,7 @@ class FugleQuoteClient:
                                 await cb(q)
                     except Exception as e:
                         logger.debug(f"[{symbol}] quote 查詢失敗：{e}")
-                    await asyncio.sleep(0.1)   # 每檔間隔 0.1 秒避免打太快
+                    await asyncio.sleep(1.0)   # 每檔間隔 1 秒，避免 rate limit
             except asyncio.CancelledError:
                 logger.info("FugleQuoteClient cancelled.")
                 break
