@@ -92,19 +92,23 @@ class ORBBacktestEngine:
 
     def __init__(
         self,
-        volume_ratio:  float = 0.8,
-        min_orb_pct:   float = 0.008,
-        stop_loss_pct: float = 0.008,
-        profit_ratio:  float = 1.5,
-        use_trailing:  bool  = True,
-        max_hold_bars: int   = 60,    # 最多持倉 60 分鐘
+        volume_ratio:     float = 1.5,
+        min_orb_pct:      float = 0.008,
+        stop_loss_pct:    float = 0.008,
+        profit_ratio:     float = 1.5,
+        use_trailing:     bool  = True,
+        max_hold_bars:    int   = 90,    # 最多持倉 90 分鐘（到 10:30）
+        early_exit_bars:  int   = 15,    # 15 分鐘時間停損
+        early_exit_r:     float = 0.3,   # 未達 0.3R 就出場
     ):
-        self.volume_ratio  = volume_ratio
-        self.min_orb_pct   = min_orb_pct
-        self.stop_loss_pct = stop_loss_pct
-        self.profit_ratio  = profit_ratio
-        self.use_trailing  = use_trailing
-        self.max_hold_bars = max_hold_bars
+        self.volume_ratio    = volume_ratio
+        self.min_orb_pct     = min_orb_pct
+        self.stop_loss_pct   = stop_loss_pct
+        self.profit_ratio    = profit_ratio
+        self.use_trailing    = use_trailing
+        self.max_hold_bars   = max_hold_bars
+        self.early_exit_bars = early_exit_bars   # 新增
+        self.early_exit_r    = early_exit_r      # 新增
 
     def run_day(
         self,
@@ -216,7 +220,7 @@ class ORBBacktestEngine:
 
         post_entry = bars.iloc[entry_idx + 1:entry_idx + 1 + self.max_hold_bars]
 
-        for j, bar in post_entry.iterrows():
+        for bars_held, (j, bar) in enumerate(post_entry.iterrows()):
             h, l, c = bar["high"], bar["low"], bar["close"]
             recent_lows.append(l if direction == "LONG" else h)
             if len(recent_lows) > 2:
@@ -225,6 +229,16 @@ class ORBBacktestEngine:
             if direction == "LONG":
                 peak = h
                 profit_r = (c - entry_price) / R
+
+                # ── 早期時間停損：持倉 N 根後若未達 early_exit_r，直接出場 ──
+                if (self.early_exit_bars > 0
+                        and bars_held == self.early_exit_bars - 1
+                        and profit_r < self.early_exit_r
+                        and phase == "initial"):
+                    exit_price  = c
+                    exit_reason = "early_time_stop"
+                    exit_time   = bar["time"]
+                    break
 
                 # 保本
                 if phase == "initial" and profit_r >= 1.0:
@@ -253,6 +267,16 @@ class ORBBacktestEngine:
 
             else:  # SHORT
                 profit_r = (entry_price - c) / R
+
+                # ── 早期時間停損 ──
+                if (self.early_exit_bars > 0
+                        and bars_held == self.early_exit_bars - 1
+                        and profit_r < self.early_exit_r
+                        and phase == "initial"):
+                    exit_price  = c
+                    exit_reason = "early_time_stop"
+                    exit_time   = bar["time"]
+                    break
 
                 if phase == "initial" and profit_r >= 1.0:
                     phase = "breakeven_trailing"

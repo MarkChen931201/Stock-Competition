@@ -83,7 +83,7 @@ class ORBBreakoutStrategy(BaseStrategy):
         stop_loss_pct: float = self._param("stop_loss_pct", 0.008)
         profit_ratio: float  = self._param("profit_ratio", 1.5)
         market_symbol: str   = self._param("market_symbol", "TAIEX")
-        min_orb_pct: float   = self._param("min_orb_pct", 0.008)
+        min_orb_pct: float   = self._param("min_orb_pct", 0.015)  # 回測最佳：1.5%
         market_long_th: float  = self._param("market_long_th", -0.003)
         market_short_th: float = self._param("market_short_th", 0.003)
         time_cutoff_hour: int  = self._param("time_cutoff_hour", 11)   # 11:00 後不開新倉
