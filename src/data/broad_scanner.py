@@ -58,6 +58,19 @@ class BroadScanner:
         self._running = True
         logger.info(f"廣域掃描器啟動，每 {_SCAN_INTERVAL}s 掃 {len(self.all_symbols)} 檔")
         while self._running:
+            now = datetime.now()
+            hour, minute = now.hour, now.minute
+
+            # 非交易時段（09:00 前或 13:30 後）不查詢 TWSE
+            in_market = (9, 0) <= (hour, minute) <= (13, 30)
+            if not in_market:
+                # 收盤後清空熱門池，避免昨日資料影響明日
+                if (hour, minute) > (13, 30) and self.hot_symbols:
+                    self.hot_symbols.clear()
+                    logger.debug("收盤後清空熱門股池")
+                await asyncio.sleep(60)   # 非交易時段每分鐘確認一次
+                continue
+
             try:
                 await self._scan_once()
             except asyncio.CancelledError:

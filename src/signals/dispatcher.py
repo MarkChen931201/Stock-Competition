@@ -68,12 +68,6 @@ class SignalDispatcher:
         self._sent_count = 0
         self._rejected_cost = 0
         self._rejected_dedup = 0
-
-    def reset(self) -> None:
-        self._dedup.reset()
-        self._sent_count = 0
-        self._rejected_cost = 0
-        self._rejected_dedup = 0
         self._rejected_score = 0
 
     @property
