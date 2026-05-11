@@ -24,6 +24,7 @@ from src.data.cache import IntraDayCache, cache as global_cache
 from src.data.fugle_client import Bar, FugleWebSocketClient, Tick
 from src.data.fugle_quote_client import FugleQuote, FugleQuoteClient
 from src.data.twse_client import OrderBook
+from src.data.broad_scanner import BroadScanner, load_all_twse_symbols
 from src.notifier.discord_bot import DiscordNotifier
 from src.signals.dispatcher import SignalDispatcher
 from src.strategies.base import Signal
@@ -101,6 +102,16 @@ class IntraDayScheduler:
         # 防止收盤後繼續發訊號
         self._signal_stopped = False
 
+        # 廣域掃描：熱門股共享集合（TWSE 發現異動後加入）
+        self._hot_symbols: set[str] = set()
+        _all_scan_syms = load_all_twse_symbols(
+            str(__import__("pathlib").Path(__file__).parent.parent / "config" / "universe.yaml")
+        )
+        self._broad_scanner = BroadScanner(
+            all_symbols=_all_scan_syms,
+            hot_symbols=self._hot_symbols,
+        )
+
     # --- 啟動入口 ---
 
     async def run(self) -> None:
@@ -127,13 +138,13 @@ class IntraDayScheduler:
         self._fugle.on_bar(self._on_bar)
         self._quote.on_quote(self._on_quote)
 
-        # Fugle WebSocket 免費方案只允許 1 條連線，不穩定，改純 REST 模式
-        # 並行跑：Quote 輪詢（OBI）+ 收盤監控 + K 棒輪詢（策略觸發）
+        # 並行跑：Quote 輪詢（OBI）+ K棒輪詢（策略）+ 廣域掃描（全市場）+ 收盤監控
         try:
             await asyncio.gather(
                 self._quote.run(),
                 self._closing_monitor(),
                 self._bar_polling_loop(),
+                self._broad_scanner.run(),
             )
         except asyncio.CancelledError:
             logger.info("Scheduler 收到取消訊號，開始關閉…")
@@ -234,13 +245,16 @@ class IntraDayScheduler:
             if (now.hour, now.minute) >= (_SIGNAL_CUTOFF_HOUR, _SIGNAL_CUTOFF_MINUTE):
                 break
 
+            # 合併固定監控池 + 廣域掃描發現的熱門股（去重）
+            scan_targets = list(dict.fromkeys(self.symbols + list(self._hot_symbols)))
+
             updated = 0
-            for symbol in self.symbols:
+            for symbol in scan_targets:
                 try:
                     data = rest.stock.intraday.candles(symbol=symbol, timeframe="1")
                     candles = data.get("data", [])
                     if not candles:
-                        await asyncio.sleep(1.0)
+                        await asyncio.sleep(0.5)
                         continue
                     latest = candles[-1]
                     ts_str = latest.get("date", "")
@@ -258,12 +272,12 @@ class IntraDayScheduler:
                     updated += 1
                 except Exception as e:
                     logger.debug(f"[{symbol}] candle 查詢失敗：{e}")
-                await asyncio.sleep(1.0)   # 每檔間隔 1 秒
+                await asyncio.sleep(0.5)   # 每檔間隔 0.5 秒（136檔×0.5s=68s）
 
-            logger.info(f"1分K 更新完成：{updated}/{len(self.symbols)} 檔")
+            logger.info(f"1分K 更新完成：{updated}/{len(scan_targets)} 檔（含熱門股 {len(self._hot_symbols)} 檔）")
 
-            # 觸發一次策略判斷（用最後一批 bar）
-            for symbol in self.symbols:
+            # 觸發一次策略判斷
+            for symbol in scan_targets:
                 bar = self.cache.get_last_bar(symbol)
                 if bar:
                     await self._on_bar(bar)
