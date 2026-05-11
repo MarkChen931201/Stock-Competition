@@ -127,10 +127,10 @@ class IntraDayScheduler:
         self._fugle.on_bar(self._on_bar)
         self._quote.on_quote(self._on_quote)
 
-        # 並行跑 Fugle WS + Fugle Quote 輪詢 + 收盤監控 + 每分鐘拉K
+        # Fugle WebSocket 免費方案只允許 1 條連線，不穩定，改純 REST 模式
+        # 並行跑：Quote 輪詢（OBI）+ 收盤監控 + K 棒輪詢（策略觸發）
         try:
             await asyncio.gather(
-                self._fugle.run(),
                 self._quote.run(),
                 self._closing_monitor(),
                 self._bar_polling_loop(),
