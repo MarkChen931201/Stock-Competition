@@ -52,18 +52,17 @@ class OBIBurstStrategy(BaseStrategy):
         self._obi_history[book.symbol].append(book.obi)
 
     def generate_signal(self, symbol: str, stock_name: str) -> Signal | None:
-        """在每根 bar 更新後呼叫，用當時累積的 OBI 歷史判斷。"""
-        obi_threshold: float = self._param("obi_threshold", 0.5)      # 降低：更容易觸發
-        obi_neg_threshold: float = self._param("obi_neg_threshold", -0.5)
-        consecutive: int = self._param("consecutive", 2)               # 降低：連續2次即可
-        top_vol_pct: float = self._param("top_vol_pct", 0.15)          # 放寬：前15%即算大量
-        cooldown_bars: int = self._param("cooldown_bars", 5)
+        """在每根 bar 更新後呼叫，結合 weighted_obi + best_level_ratio 判斷。"""
+        w_obi_threshold: float = self._param("w_obi_threshold", 0.4)   # 加權 OBI 門檻
+        blr_threshold:   float = self._param("blr_threshold", 0.55)    # 買一壓力比門檻
+        consecutive:     int   = self._param("consecutive", 2)
+        top_vol_pct:     float = self._param("top_vol_pct", 0.15)
+        cooldown_bars:   int   = self._param("cooldown_bars", 5)
 
         history = self._obi_history.get(symbol)
         if not history or len(history) < consecutive:
             return None
 
-        # 冷卻判斷：取目前 bar 數量
         all_bars = self.cache.get_bars(symbol)
         current_bar_count = len(all_bars)
         last_fired = self._cooldown.get(symbol, 0)
@@ -75,18 +74,21 @@ class OBIBurstStrategy(BaseStrategy):
         if bar is None or book is None:
             return None
 
-        # 成交量百分位：當根量是否為今日前 top_vol_pct
+        # 用加權 OBI + 買一壓力比 取代原本的等權重 OBI
+        w_obi = book.weighted_obi
+        blr   = book.best_level_ratio
+
         all_volumes = [b.volume for b in all_bars]
         if not all_volumes:
             return None
-        all_volumes_sorted = sorted(all_volumes)
-        threshold_idx = int(len(all_volumes_sorted) * (1 - top_vol_pct))
-        vol_threshold = all_volumes_sorted[threshold_idx]
+        threshold_idx = int(len(sorted(all_volumes)) * (1 - top_vol_pct))
+        vol_threshold = sorted(all_volumes)[threshold_idx]
         is_high_volume = bar.volume >= vol_threshold
 
         # ===== 買盤失衡（WATCH 多）=====
-        all_obi_high = all(obi >= obi_threshold for obi in history)
-        if all_obi_high and is_high_volume:
+        # 條件：連續 N 次 weighted_obi > 門檻 AND 買一壓力比 > 門檻
+        all_obi_high = all(obi >= w_obi_threshold for obi in history)
+        if all_obi_high and blr >= blr_threshold and is_high_volume:
             self._cooldown[symbol] = current_bar_count
             avg_obi = sum(history) / len(history)
             return Signal(
@@ -97,7 +99,8 @@ class OBIBurstStrategy(BaseStrategy):
                 trigger_price=bar.close,
                 strategy_name=self.name,
                 reason=(
-                    f"連續 {consecutive} 次 OBI≥{obi_threshold}（均值={avg_obi:.2f}）｜"
+                    f"加權OBI={w_obi:.2f}（連{consecutive}次≥{w_obi_threshold}）｜"
+                    f"買一壓力比={blr:.1%}｜"
                     f"大量 {bar.volume:,} 股｜"
                     f"買一={book.best_bid} / 賣一={book.best_ask}"
                 ),
@@ -112,8 +115,8 @@ class OBIBurstStrategy(BaseStrategy):
             )
 
         # ===== 賣盤失衡（WATCH 空）=====
-        all_obi_low = all(obi <= obi_neg_threshold for obi in history)
-        if all_obi_low and is_high_volume:
+        all_obi_low = all(obi <= -w_obi_threshold for obi in history)
+        if all_obi_low and blr <= (1 - blr_threshold) and is_high_volume:
             self._cooldown[symbol] = current_bar_count
             avg_obi = sum(history) / len(history)
             return Signal(
@@ -124,13 +127,16 @@ class OBIBurstStrategy(BaseStrategy):
                 trigger_price=bar.close,
                 strategy_name=self.name,
                 reason=(
-                    f"連續 {consecutive} 次 OBI≤{obi_neg_threshold}（均值={avg_obi:.2f}）｜"
+                    f"加權OBI={w_obi:.2f}（連{consecutive}次≤{-w_obi_threshold}）｜"
+                    f"買一壓力比={blr:.1%}｜"
                     f"大量 {bar.volume:,} 股｜"
                     f"買一={book.best_bid} / 賣一={book.best_ask}"
                 ),
                 extra={
                     "obi_history": list(history),
                     "avg_obi": round(avg_obi, 3),
+                    "weighted_obi": round(w_obi, 3),
+                    "best_level_ratio": round(blr, 3),
                     "best_bid": book.best_bid,
                     "best_ask": book.best_ask,
                     "spread": book.spread,

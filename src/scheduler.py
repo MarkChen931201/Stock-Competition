@@ -103,6 +103,10 @@ class IntraDayScheduler:
             trailing_stop_manager=self._trailing,
             signal_scorer=self._scorer,
         )
+        # 快速 OBI 輪詢（前 10 核心股，每 5 秒）— 解決速度問題
+        self._fast_quote = FugleQuoteClient(
+            api_key=settings.fugle_api_key, poll_interval=5.0
+        )
 
         # --- 四個策略（共享同一個 cache）---
         self._orb  = ORBBreakoutStrategy(self.cache)
@@ -144,19 +148,24 @@ class IntraDayScheduler:
         self._fugle.add_symbols(fugle_symbols)
         logger.info(f"Fugle WebSocket 訂閱（tick）：{fugle_symbols}")
 
-        # Fugle Quote 輪詢前 10 核心檔（OBI/五檔），每檔間 1s，間隔 30s
-        # 10 檔 × 2 次/分 = 20 req/min → 安全
-        self._quote.add_symbols(self.symbols[:10])
+        # Fugle Quote 輪詢：一般頻率（前 10 以外的股票，30s）
+        self._quote.add_symbols(self.symbols[10:])
+
+        # 快速 OBI 輪詢：前 10 核心股，5s 輪詢（更即時的委託簿）
+        # 5s × 10檔 × 1s間隔 = 15s/輪 = 4輪/分 = 40 req/min → 安全
+        self._fast_quote.add_symbols(self.symbols[:10])
+        self._fast_quote.on_quote(self._on_quote)  # 共用同一個 callback
 
         # 掛上 callback
         self._fugle.on_tick(self._on_tick)
         self._fugle.on_bar(self._on_bar)
         self._quote.on_quote(self._on_quote)
 
-        # 並行跑：Quote 輪詢（OBI）+ K棒輪詢（策略）+ 廣域掃描（全市場）+ 收盤監控
+        # 並行跑：一般Quote + 快速OBI + K棒輪詢 + 廣域掃描 + 收盤監控
         try:
             await asyncio.gather(
                 self._quote.run(),
+                self._fast_quote.run(),   # 前 10 核心股 5s 快速輪詢
                 self._closing_monitor(),
                 self._bar_polling_loop(),
                 self._broad_scanner.run(),
@@ -333,6 +342,7 @@ class IntraDayScheduler:
         """優雅關閉所有連線，並推播今日統計摘要。"""
         await self._fugle.stop()
         await self._quote.stop()
+        await self._fast_quote.stop()
 
         stats = self._dispatcher.stats
         logger.info(

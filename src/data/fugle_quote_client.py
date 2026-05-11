@@ -41,13 +41,28 @@ class FugleQuote:
 
     @property
     def obi(self) -> float:
-        """委買委賣比 = (委買量 - 委賣量) / (委買量 + 委賣量)。
-        基於五檔委託簿，反映市場「意圖」。
-        """
+        """等權重 OBI（五檔總和）。"""
         total_bid = sum(self.bid_sizes)
         total_ask = sum(self.ask_sizes)
         total = total_bid + total_ask
         return (total_bid - total_ask) / total if total else 0.0
+
+    @property
+    def weighted_obi(self) -> float:
+        """加權 OBI：買一權重 5，買二 4，...，買五 1。"""
+        weights = [5, 4, 3, 2, 1]
+        w_bid = sum(v * w for v, w in zip(self.bid_sizes, weights))
+        w_ask = sum(v * w for v, w in zip(self.ask_sizes, weights))
+        total = w_bid + w_ask
+        return (w_bid - w_ask) / total if total else 0.0
+
+    @property
+    def best_level_ratio(self) -> float:
+        """買一壓力比 = 買一量 / (買一量 + 賣一量)。"""
+        b1 = self.bid_sizes[0] if self.bid_sizes else 0
+        a1 = self.ask_sizes[0] if self.ask_sizes else 0
+        total = b1 + a1
+        return b1 / total if total else 0.5
 
     @property
     def uptick_ratio(self) -> float:

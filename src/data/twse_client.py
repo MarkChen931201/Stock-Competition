@@ -50,15 +50,36 @@ class OrderBook:
 
     @property
     def obi(self) -> float:
-        """Order Book Imbalance = (買量 - 賣量) / (買量 + 賣量)，範圍 [-1, 1]。
-        > 0 代表買盤壓過賣盤，< 0 代表賣盤壓過買盤。
-        """
+        """等權重 OBI（五檔總和）= (買量總和 - 賣量總和) / 總量。"""
         total_bid = sum(self.bid_volumes)
         total_ask = sum(self.ask_volumes)
         total = total_bid + total_ask
-        if total == 0:
-            return 0.0
-        return (total_bid - total_ask) / total
+        return (total_bid - total_ask) / total if total else 0.0
+
+    @property
+    def weighted_obi(self) -> float:
+        """加權 OBI：買一/賣一權重最高（×5），依序遞減至買五/賣五（×1）。
+
+        買一代表最接近成交的委託，影響力最大。
+        範圍 [-1, 1]，> 0 代表加權後仍是買壓。
+        """
+        weights = [5, 4, 3, 2, 1]
+        w_bid = sum(v * w for v, w in zip(self.bid_volumes, weights))
+        w_ask = sum(v * w for v, w in zip(self.ask_volumes, weights))
+        total = w_bid + w_ask
+        return (w_bid - w_ask) / total if total else 0.0
+
+    @property
+    def best_level_ratio(self) -> float:
+        """買一壓力比 = 買一量 / (買一量 + 賣一量)。
+
+        只看最佳一檔，反映「即將成交」的買賣方向。
+        > 0.6：大買單在隊，買壓強烈；< 0.4：大賣單在隊，賣壓強烈
+        """
+        b1 = self.bid_volumes[0] if self.bid_volumes else 0
+        a1 = self.ask_volumes[0] if self.ask_volumes else 0
+        total = b1 + a1
+        return b1 / total if total else 0.5
 
     @property
     def best_bid(self) -> float:
