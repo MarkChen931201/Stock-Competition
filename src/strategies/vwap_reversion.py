@@ -92,9 +92,9 @@ class VWAPReversionStrategy(BaseStrategy):
             return None
 
         # --- 讀取參數 ---
-        sigma: float = self._param("sigma", 1.5)
-        stop_sigma: float = self._param("stop_sigma", 2.0)
-        vol_shrink_ratio: float = self._param("vol_shrink_ratio", 0.7)
+        sigma: float = self._param("sigma", 1.0)            # 降低：軌道更窄，更容易觸及
+        stop_sigma: float = self._param("stop_sigma", 1.5)
+        vol_shrink_ratio: float = self._param("vol_shrink_ratio", 0.8)  # 稍微放寬量縮判斷
         vol_ref_bars: int = self._param("vol_ref_bars", 10)
 
         lower_band = vwap_state.lower_band(sigma)

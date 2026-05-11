@@ -76,10 +76,10 @@ class ORBBreakoutStrategy(BaseStrategy):
             return None
 
         # 取參數
-        volume_ratio: float = self._param("volume_ratio", 1.5)
+        volume_ratio: float = self._param("volume_ratio", 0.8)   # 降低：低量日仍可捕捉相對爆量
         rsi_period: int = self._param("rsi_period", 6)
-        rsi_low: float = self._param("rsi_low", 50.0)
-        rsi_high: float = self._param("rsi_high", 80.0)
+        rsi_low: float = self._param("rsi_low", 40.0)            # 放寬：RSI 過濾條件鬆開
+        rsi_high: float = self._param("rsi_high", 85.0)
         stop_loss_pct: float = self._param("stop_loss_pct", 0.008)
         profit_ratio: float = self._param("profit_ratio", 1.5)
 

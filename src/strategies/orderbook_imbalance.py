@@ -53,10 +53,10 @@ class OBIBurstStrategy(BaseStrategy):
 
     def generate_signal(self, symbol: str, stock_name: str) -> Signal | None:
         """在每根 bar 更新後呼叫，用當時累積的 OBI 歷史判斷。"""
-        obi_threshold: float = self._param("obi_threshold", 0.6)
-        obi_neg_threshold: float = self._param("obi_neg_threshold", -0.6)
-        consecutive: int = self._param("consecutive", 3)
-        top_vol_pct: float = self._param("top_vol_pct", 0.05)
+        obi_threshold: float = self._param("obi_threshold", 0.5)      # 降低：更容易觸發
+        obi_neg_threshold: float = self._param("obi_neg_threshold", -0.5)
+        consecutive: int = self._param("consecutive", 2)               # 降低：連續2次即可
+        top_vol_pct: float = self._param("top_vol_pct", 0.15)          # 放寬：前15%即算大量
         cooldown_bars: int = self._param("cooldown_bars", 5)
 
         history = self._obi_history.get(symbol)
