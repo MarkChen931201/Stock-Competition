@@ -16,6 +16,7 @@ from src.notifier.discord_bot import DiscordNotifier
 from src.notifier.embed_builder import build_signal_embed
 from src.risk.cost_calculator import AssetType, calc_round_trip_cost
 from src.signals.dedup import SignalDedup
+from src.signals.scorer import SignalScorer
 from src.strategies.base import Signal, SignalType, Direction
 
 # 判斷是否為 ETF 的代號前綴 / 後綴（台股 ETF 代號通常以 0 開頭或含英文）
@@ -45,18 +46,21 @@ class SignalDispatcher:
         min_profit_pct: float = 0.008,
         cooldown_minutes: int = 5,
         default_lots: int = 1,
-        trailing_stop_manager=None,   # TrailingStopManager（可選）
+        trailing_stop_manager=None,
+        signal_scorer: SignalScorer | None = None,
     ):
         self._notifier = notifier
         self._min_profit_pct = min_profit_pct
         self._default_lots = default_lots
         self._dedup = SignalDedup(cooldown_minutes=cooldown_minutes)
         self._trailing = trailing_stop_manager
+        self._scorer = signal_scorer or SignalScorer()
 
         # 統計：今日推播次數
         self._sent_count = 0
         self._rejected_cost = 0
         self._rejected_dedup = 0
+        self._rejected_score = 0
 
     def reset(self) -> None:
         """每日開盤前呼叫，重置去重狀態與統計。"""
@@ -65,12 +69,20 @@ class SignalDispatcher:
         self._rejected_cost = 0
         self._rejected_dedup = 0
 
+    def reset(self) -> None:
+        self._dedup.reset()
+        self._sent_count = 0
+        self._rejected_cost = 0
+        self._rejected_dedup = 0
+        self._rejected_score = 0
+
     @property
     def stats(self) -> dict:
         return {
             "sent": self._sent_count,
             "rejected_cost": self._rejected_cost,
             "rejected_dedup": self._rejected_dedup,
+            "rejected_score": self._rejected_score,
         }
 
     def submit(self, signal: Signal, lots: int | None = None) -> bool:
@@ -120,13 +132,26 @@ class SignalDispatcher:
                 self._rejected_cost += 1
                 return False
 
-        # --- Step 3: 去重過濾 ---
+        # --- Step 3: 訊號品質評分 ---
+        if signal.signal_type == SignalType.ENTRY:
+            qualified, score, breakdown = self._scorer.is_qualified(signal)
+            if not qualified:
+                logger.info(
+                    f"[{signal.symbol}] REJECT（評分 {score:.1f}）{breakdown}"
+                )
+                self._rejected_score += 1
+                return False
+            # 把評分寫入 extra，供 embed 顯示
+            signal.extra["signal_score"] = round(score, 1)
+            signal.extra["score_breakdown"] = breakdown
+
+        # --- Step 4: 去重過濾 ---
         if self._dedup.is_duplicate(signal.symbol, signal.direction):
             logger.debug(f"[{signal.symbol}] REJECT（去重）冷卻中")
             self._rejected_dedup += 1
             return False
 
-        # --- Step 4: 建立 Embed 並推播 ---
+        # --- Step 5: 建立 Embed 並推播 ---
         embed = build_signal_embed(signal, cost, lots=lots, asset_type=asset_type)
 
         # ENTRY 訊號加 @here 提醒，WATCH 不加

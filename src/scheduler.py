@@ -25,7 +25,9 @@ from src.data.fugle_client import Bar, FugleWebSocketClient, Tick
 from src.data.fugle_quote_client import FugleQuote, FugleQuoteClient
 from src.data.twse_client import OrderBook
 from src.data.broad_scanner import BroadScanner, load_all_twse_symbols
+from src.data.institutional import InstitutionalLoader
 from src.risk.trailing_stop import TrailingStopManager
+from src.signals.scorer import SignalScorer
 from src.notifier.discord_bot import DiscordNotifier
 from src.signals.dispatcher import SignalDispatcher
 from src.strategies.base import Signal
@@ -91,11 +93,15 @@ class IntraDayScheduler:
         self._quote = FugleQuoteClient(api_key=settings.fugle_api_key, poll_interval=30.0)
         self._notifier = DiscordNotifier(webhook_url=settings.discord_webhook_url)
         self._trailing = TrailingStopManager(notifier=self._notifier)
+        # 籌碼面資料（盤前載入昨日）
+        self._inst = InstitutionalLoader(token=settings.finmind_token)
+        self._scorer = SignalScorer(inst_loader=self._inst, min_score=4.0)
         self._dispatcher = SignalDispatcher(
             notifier=self._notifier,
             min_profit_pct=0.008,
             cooldown_minutes=5,
             trailing_stop_manager=self._trailing,
+            signal_scorer=self._scorer,
         )
 
         # --- 四個策略（共享同一個 cache）---
@@ -122,6 +128,9 @@ class IntraDayScheduler:
     async def run(self) -> None:
         """啟動整個盤中系統，直到 13:25 後自動結束。"""
         logger.info(f"IntraDayScheduler 啟動，監控 {len(self.symbols)} 檔標的")
+        # 盤前載入昨日籌碼資料
+        from datetime import timedelta
+        self._inst.load(datetime.now().date() - timedelta(days=1))
         self.cache.reset()
         self._orb.reset()
         self._vwap.reset()

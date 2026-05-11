@@ -57,6 +57,18 @@ def build_signal_embed(
         value=signal.generated_at.strftime("%H:%M:%S"),
         inline=True,
     )
+    # --- 訊號評分（若有）---
+    score = signal.extra.get("signal_score") if signal.extra else None
+    if score is not None:
+        breakdown = signal.extra.get("score_breakdown", {})
+        breakdown_str = "  ".join(f"{k}:{v}" for k, v in breakdown.items())
+        stars = "⭐" * int(score / 2)
+        embed.add_embed_field(
+            name=f"🎯 訊號評分  {stars}  {score}/10",
+            value=f"`{breakdown_str}`",
+            inline=False,
+        )
+
     embed.add_embed_field(name="​", value="​", inline=True)  # 佔位，強制換行
 
     # --- 價格資訊 ---
