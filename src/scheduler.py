@@ -110,8 +110,12 @@ class IntraDayScheduler:
         self._dispatcher.reset()
         self._signal_stopped = False
 
-        # 訂閱所有標的
-        self._fugle.add_symbols(self.symbols)
+        # Fugle WebSocket 免費方案訂閱上限約 5 個，只取前 5 核心標的
+        fugle_symbols = self.symbols[:5]
+        self._fugle.add_symbols(fugle_symbols)
+        logger.info(f"Fugle WebSocket 訂閱：{fugle_symbols}")
+
+        # TWSE 輪詢無上限，訂閱全部 30 檔
         self._twse.add_symbols(self.symbols)
 
         # 掛上 callback
@@ -119,13 +123,15 @@ class IntraDayScheduler:
         self._fugle.on_bar(self._on_bar)
         self._twse.on_orderbook(self._on_orderbook)
 
-        # 並行跑 Fugle WS + TWSE 輪詢 + 收盤監控 + 09:30 排行榜
+        # 並行跑 Fugle WS + TWSE 輪詢 + 收盤監控 + 每分鐘拉K
+        # ⚠️ morning_ranking 已移出排程器，請另開終端機執行：
+        #    python3 scripts/morning_ranking.py
         try:
             await asyncio.gather(
                 self._fugle.run(),
                 self._twse.run(),
                 self._closing_monitor(),
-                self._morning_ranking_task(),
+                self._bar_polling_loop(),
             )
         except asyncio.CancelledError:
             logger.info("Scheduler 收到取消訊號，開始關閉…")
@@ -170,13 +176,51 @@ class IntraDayScheduler:
 
     # --- 收盤監控 ---
 
+    async def _bar_polling_loop(self) -> None:
+        """每 60 秒用 Fugle REST API 拉一次所有標的的最新 1分K，注入 cache。
+        補足 WebSocket candles 訂閱被上限擋掉的缺口。
+        """
+        from fugle_marketdata import RestClient as FugleRestClient
+        rest = FugleRestClient(api_key=settings.fugle_api_key)
+
+        while True:
+            await asyncio.sleep(60)
+            now = datetime.now()
+            if (now.hour, now.minute) >= (_SIGNAL_CUTOFF_HOUR, _SIGNAL_CUTOFF_MINUTE):
+                break
+            for symbol in self.symbols:
+                try:
+                    data = rest.stock.intraday.candles(
+                        symbol=symbol, timeframe="1"
+                    )
+                    candles = data.get("data", [])
+                    if not candles:
+                        continue
+                    latest = candles[-1]
+                    ts_str = latest.get("date", "")
+                    ts = datetime.fromisoformat(ts_str) if ts_str else now
+                    from src.data.fugle_client import Bar
+                    bar = Bar(
+                        symbol=symbol,
+                        open=float(latest.get("open", 0)),
+                        high=float(latest.get("high", 0)),
+                        low=float(latest.get("low", 0)),
+                        close=float(latest.get("close", 0)),
+                        volume=int(latest.get("volume", 0)),
+                        timestamp=ts,
+                    )
+                    self.cache.update_bar(bar)
+                except Exception as e:
+                    logger.debug(f"[{symbol}] REST candle 查詢失敗：{e}")
+            logger.debug("1分K REST 輪詢完成")
+
     async def _morning_ranking_task(self) -> None:
-        """等到 09:30 推播全市場早盤排行榜。"""
+        """等到 09:30 推播全市場早盤排行榜（啟動後至少等 30 秒讓 TWSE 穩定）。"""
         now = datetime.now()
         target = now.replace(hour=9, minute=30, second=0, microsecond=0)
-        if now < target:
-            wait_sec = (target - now).total_seconds()
-            logger.info(f"早盤排行榜將於 09:30 推播，剩 {wait_sec:.0f} 秒")
+        wait_sec = max((target - now).total_seconds(), 30)
+        if wait_sec > 0:
+            logger.info(f"早盤排行榜將於 {wait_sec:.0f} 秒後推播")
             await asyncio.sleep(wait_sec)
 
         try:

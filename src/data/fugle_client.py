@@ -21,10 +21,10 @@ from typing import Awaitable, Callable
 import websockets
 from loguru import logger
 
-# Fugle WebSocket endpoint（需帶 apiKey query param）
-_WS_BASE = "wss://api.fugle.tw/marketdata/v1.0/stock/intraday/streaming"
+# Fugle WebSocket endpoint（v1.0，不含 intraday）
+_WS_BASE = "wss://api.fugle.tw/marketdata/v1.0/stock/streaming"
 
-# 心跳間隔（秒）—— Fugle 建議 30 秒送一次 ping 避免被 server 斷線
+# 心跳間隔（秒）
 _HEARTBEAT_INTERVAL = 30
 
 
@@ -126,14 +126,34 @@ class FugleWebSocketClient:
     # --- 私有方法 ---
 
     async def _connect_and_listen(self) -> None:
-        url = f"{_WS_BASE}?apiKey={self._api_key}"
         logger.info(f"連線至 Fugle WebSocket：{_WS_BASE}")
 
-        async with websockets.connect(url, ping_interval=None) as ws:
+        async with websockets.connect(_WS_BASE, ping_interval=None) as ws:
             self._ws = ws
-            logger.info("WebSocket 已連線，開始訂閱…")
 
-            # 訂閱所有股票
+            # Step 1: 連線後先送 auth event（Fugle v2 SDK 的認證方式）
+            await ws.send(json.dumps({
+                "event": "auth",
+                "data": {"apikey": self._api_key}
+            }))
+
+            # 等待 authenticated 回應（最多 5 秒）
+            auth_ok = False
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                msg = json.loads(raw)
+                if msg.get("event") == "authenticated":
+                    auth_ok = True
+                    logger.info("Fugle WebSocket 認證成功，開始訂閱…")
+                else:
+                    logger.warning(f"Fugle 認證回應異常：{msg}")
+            except asyncio.TimeoutError:
+                logger.warning("Fugle 認證逾時")
+
+            if not auth_ok:
+                return
+
+            # Step 2: 訂閱所有股票
             await self._subscribe_all(ws)
 
             # 並行執行：收訊息 + 定期心跳
@@ -148,26 +168,16 @@ class FugleWebSocketClient:
                 self._ws = None
 
     async def _subscribe_all(self, ws: websockets.WebSocketClientProtocol) -> None:
-        """對每支股票發送 trade 與 candle(1分K) 的訂閱請求。"""
+        """對每支股票訂閱 trades 頻道。
+        注意：免費方案上限 10 個訂閱，只訂 trades 不訂 candles。
+        1分K 由 scheduler 每分鐘透過 REST API 補抓。
+        """
         for symbol in self._symbols:
-            # 訂閱成交明細
             await ws.send(json.dumps({
-                "action": "subscribe",
-                "params": {
-                    "channel": "trades",
-                    "symbol": symbol,
-                }
+                "event": "subscribe",
+                "data": {"channel": "trades", "symbol": symbol}
             }))
-            # 訂閱 1分K（Fugle 稱為 candles）
-            await ws.send(json.dumps({
-                "action": "subscribe",
-                "params": {
-                    "channel": "candles",
-                    "symbol": symbol,
-                    "resolution": "1",   # 1 分鐘
-                }
-            }))
-            logger.debug(f"已訂閱 {symbol}")
+            logger.debug(f"已訂閱 trades: {symbol}")
 
     async def _receive_loop(self, ws: websockets.WebSocketClientProtocol) -> None:
         """持續接收並分派 WebSocket 訊息。"""
@@ -181,27 +191,29 @@ class FugleWebSocketClient:
                 logger.exception(f"處理訊息時發生錯誤：{e}")
 
     async def _heartbeat_loop(self, ws: websockets.WebSocketClientProtocol) -> None:
-        """定期送 ping 保持連線（Fugle 使用 application-level ping）。"""
+        """定期送 ping 保持連線（Fugle v2 ping 格式）。"""
         while True:
             await asyncio.sleep(_HEARTBEAT_INTERVAL)
             try:
-                await ws.send(json.dumps({"action": "ping"}))
+                await ws.send(json.dumps({"event": "ping", "data": {"state": "ping"}}))
                 logger.debug("ping sent")
             except Exception:
-                break  # 連線已斷，讓外層重連
+                break
 
     async def _dispatch(self, msg: dict) -> None:
-        """根據訊息 channel 路由到對應的處理器。"""
-        event = msg.get("event")
+        """根據訊息 event/channel 路由到對應的處理器。
+        Fugle v2 訊息格式：{"event": "...", "data": {...}}
+        """
+        event = msg.get("event", "")
         data = msg.get("data", {})
-        channel = msg.get("channel", "")
 
-        # 忽略系統訊息（pong、subscribed、error）
-        if event in ("pong", "subscribed"):
+        if event in ("pong", "subscribed", "authenticated", "unsubscribed"):
             return
         if event == "error":
             logger.error(f"Fugle error：{msg}")
             return
+
+        channel = data.get("channel", "") if isinstance(data, dict) else ""
 
         if channel == "trades":
             tick = self._parse_tick(data)
