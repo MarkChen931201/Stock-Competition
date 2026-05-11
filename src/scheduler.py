@@ -32,6 +32,7 @@ from src.strategies.base import Signal
 from src.strategies.orderbook_imbalance import OBIBurstStrategy
 from src.strategies.orb_breakout import ORBBreakoutStrategy
 from src.strategies.vwap_reversion import VWAPReversionStrategy
+from src.strategies.morning_momentum import MorningMomentumStrategy
 
 # 盤中訊號接收截止時間（分鐘），13:20 後不再發訊號
 _SIGNAL_CUTOFF_HOUR = 13
@@ -97,10 +98,11 @@ class IntraDayScheduler:
             trailing_stop_manager=self._trailing,
         )
 
-        # --- 三個策略（共享同一個 cache）---
-        self._orb = ORBBreakoutStrategy(self.cache)
+        # --- 四個策略（共享同一個 cache）---
+        self._orb  = ORBBreakoutStrategy(self.cache)
         self._vwap = VWAPReversionStrategy(self.cache)
-        self._obi = OBIBurstStrategy(self.cache)
+        self._obi  = OBIBurstStrategy(self.cache)
+        self._mom  = MorningMomentumStrategy(self.cache)
 
         # 防止收盤後繼續發訊號
         self._signal_stopped = False
@@ -124,6 +126,7 @@ class IntraDayScheduler:
         self._orb.reset()
         self._vwap.reset()
         self._obi.reset()
+        self._mom.reset()
         self._dispatcher.reset()
         self._signal_stopped = False
 
@@ -179,8 +182,8 @@ class IntraDayScheduler:
         symbol = bar.symbol
         name = self.name_map.get(symbol, symbol)
 
-        # 依序呼叫三個策略
-        for strategy in (self._orb, self._vwap, self._obi):
+        # 依序呼叫四個策略
+        for strategy in (self._orb, self._vwap, self._obi, self._mom):
             try:
                 signal = strategy.generate_signal(symbol, name)
                 if signal:

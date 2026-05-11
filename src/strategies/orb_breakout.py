@@ -76,20 +76,27 @@ class ORBBreakoutStrategy(BaseStrategy):
             return None
 
         # ── 讀取參數 ──
-        volume_ratio: float  = self._param("volume_ratio", 0.8)
+        volume_ratio: float  = self._param("volume_ratio", 1.5)
         rsi_period: int      = self._param("rsi_period", 6)
         rsi_low: float       = self._param("rsi_low", 40.0)
         rsi_high: float      = self._param("rsi_high", 85.0)
         stop_loss_pct: float = self._param("stop_loss_pct", 0.008)
         profit_ratio: float  = self._param("profit_ratio", 1.5)
         market_symbol: str   = self._param("market_symbol", "TAIEX")
-        min_orb_pct: float   = self._param("min_orb_pct", 0.008)    # 新增
-        market_long_th: float  = self._param("market_long_th", -0.003)  # 新增
-        market_short_th: float = self._param("market_short_th", 0.003)  # 新增
+        min_orb_pct: float   = self._param("min_orb_pct", 0.008)
+        market_long_th: float  = self._param("market_long_th", -0.003)
+        market_short_th: float = self._param("market_short_th", 0.003)
+        time_cutoff_hour: int  = self._param("time_cutoff_hour", 11)   # 11:00 後不開新倉
+        time_cutoff_min: int   = self._param("time_cutoff_min", 0)
 
         close = bar.close
         current_vol = bar.volume
         all_bars = self.cache.get_bars(symbol)
+
+        # ── 時段過濾：11:00 後不開新倉 ──
+        t = bar.timestamp
+        if (t.hour, t.minute) >= (time_cutoff_hour, time_cutoff_min):
+            return None
 
         # ── 優化 1：ORB 最小寬度過濾 ──
         # 太窄的區間（< 0.8% 昨收）代表今天開盤很平，突破容易是假突破
@@ -125,11 +132,19 @@ class ORBBreakoutStrategy(BaseStrategy):
 
         fired_directions = self._fired.setdefault(symbol, set())
 
+        # ── 今日累計量動能：開盤至今的總量應超過 ORB 均量 × bars數量（代表量能持續）
+        total_vol_today = sum(b.volume for b in all_bars)
+        avg_bar_vol = self.cache.get_recent_volume(symbol, n_bars=20)
+        # 今日累計量 > 同期均量 × 1.2 → 今天是活躍日
+        n_bars_so_far = len(all_bars)
+        is_active_day = (avg_bar_vol == 0) or (total_vol_today >= avg_bar_vol * n_bars_so_far * 0.8)
+
         # ===== 多單條件 =====
         long_cond = (
             allow_long
             and close > orb.high
             and current_vol >= avg_orb_vol * volume_ratio
+            and is_active_day                             # 今天量能不能太差
             and rsi is not None and rsi_low <= rsi <= rsi_high
             and stock_rs >= market_rs
             and Direction.LONG not in fired_directions
@@ -165,6 +180,7 @@ class ORBBreakoutStrategy(BaseStrategy):
             allow_short
             and close < orb.low
             and current_vol >= avg_orb_vol * volume_ratio
+            and is_active_day
             and rsi is not None and (100 - rsi_high) <= rsi <= (100 - rsi_low)
             and stock_rs <= market_rs
             and Direction.SHORT not in fired_directions
