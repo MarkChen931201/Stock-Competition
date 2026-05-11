@@ -1,13 +1,15 @@
 """盤中排程器 — 管理所有資料流與策略的生命週期。
 
 時間軸：
-  09:00        開市，啟動 Fugle WebSocket + TWSE 輪詢
-  09:00–09:14  更新 ORB 區間（FugleClient 的 bar callback 會自動更新 cache）
-  09:15        ORB 鎖定，ORBBreakoutStrategy 開始發訊號
-  09:30        推播全市場成交量 / 成交額 Top 20 排行榜
-  09:00–13:20  每根 1分K 結束後呼叫三個策略
-  13:20        收盤，停止接收新訊號
+  09:00        開市，啟動 Fugle WebSocket（前5檔 tick）+ Fugle Quote 輪詢（全30檔）
+  09:00–09:14  更新 ORB 區間
+  09:15        ORB 鎖定，策略開始發訊號
+  09:00–13:20  每根 1分K（REST 輪詢）更新後呼叫三個策略
+  13:20        收盤，停止發訊號
   13:25        關閉所有連線，推播今日統計摘要
+
+排行榜（09:30）請另開終端機執行：
+  python3 scripts/morning_ranking.py --now
 """
 from __future__ import annotations
 
@@ -20,7 +22,8 @@ from loguru import logger
 from config.settings import settings
 from src.data.cache import IntraDayCache, cache as global_cache
 from src.data.fugle_client import Bar, FugleWebSocketClient, Tick
-from src.data.twse_client import OrderBook, TWSEClient
+from src.data.fugle_quote_client import FugleQuote, FugleQuoteClient
+from src.data.twse_client import OrderBook
 from src.notifier.discord_bot import DiscordNotifier
 from src.signals.dispatcher import SignalDispatcher
 from src.strategies.base import Signal
@@ -82,7 +85,7 @@ class IntraDayScheduler:
 
         # --- 初始化各元件 ---
         self._fugle = FugleWebSocketClient(api_key=settings.fugle_api_key)
-        self._twse = TWSEClient(poll_interval=3.0)
+        self._quote = FugleQuoteClient(api_key=settings.fugle_api_key, poll_interval=3.0)
         self._notifier = DiscordNotifier(webhook_url=settings.discord_webhook_url)
         self._dispatcher = SignalDispatcher(
             notifier=self._notifier,
@@ -110,26 +113,24 @@ class IntraDayScheduler:
         self._dispatcher.reset()
         self._signal_stopped = False
 
-        # Fugle WebSocket 免費方案訂閱上限約 5 個，只取前 5 核心標的
+        # Fugle WebSocket 免費方案訂閱上限約 5 個，只取前 5 核心標的（tick 資料）
         fugle_symbols = self.symbols[:5]
         self._fugle.add_symbols(fugle_symbols)
-        logger.info(f"Fugle WebSocket 訂閱：{fugle_symbols}")
+        logger.info(f"Fugle WebSocket 訂閱（tick）：{fugle_symbols}")
 
-        # TWSE 輪詢無上限，訂閱全部 30 檔
-        self._twse.add_symbols(self.symbols)
+        # Fugle Quote 輪詢全部 30 檔（五檔委買委賣 + OBI，無訂閱上限）
+        self._quote.add_symbols(self.symbols)
 
         # 掛上 callback
         self._fugle.on_tick(self._on_tick)
         self._fugle.on_bar(self._on_bar)
-        self._twse.on_orderbook(self._on_orderbook)
+        self._quote.on_quote(self._on_quote)
 
-        # 並行跑 Fugle WS + TWSE 輪詢 + 收盤監控 + 每分鐘拉K
-        # ⚠️ morning_ranking 已移出排程器，請另開終端機執行：
-        #    python3 scripts/morning_ranking.py
+        # 並行跑 Fugle WS + Fugle Quote 輪詢 + 收盤監控 + 每分鐘拉K
         try:
             await asyncio.gather(
                 self._fugle.run(),
-                self._twse.run(),
+                self._quote.run(),
                 self._closing_monitor(),
                 self._bar_polling_loop(),
             )
@@ -169,9 +170,19 @@ class IntraDayScheduler:
             except Exception as e:
                 logger.exception(f"[{symbol}] {strategy.name} 發生錯誤：{e}")
 
-    async def _on_orderbook(self, book: OrderBook) -> None:
+    async def _on_quote(self, quote: FugleQuote) -> None:
+        """Fugle Quote 更新：轉成 OrderBook 格式注入 cache，供 OBI 策略使用。"""
+        book = OrderBook(
+            symbol=quote.symbol,
+            timestamp=quote.timestamp,
+            bid_prices=quote.bid_prices,
+            bid_volumes=quote.bid_sizes,
+            ask_prices=quote.ask_prices,
+            ask_volumes=quote.ask_sizes,
+            last_price=quote.last_price,
+            total_volume_lots=quote.trade_volume,
+        )
         self.cache.update_orderbook(book)
-        # OBI 策略需要每次 orderbook 更新時記錄 OBI 值
         self._obi.on_orderbook(book)
 
     # --- 收盤監控 ---
@@ -242,7 +253,7 @@ class IntraDayScheduler:
     async def _shutdown(self) -> None:
         """優雅關閉所有連線，並推播今日統計摘要。"""
         await self._fugle.stop()
-        await self._twse.stop()
+        await self._quote.stop()
 
         stats = self._dispatcher.stats
         logger.info(
