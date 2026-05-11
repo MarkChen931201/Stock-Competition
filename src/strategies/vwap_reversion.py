@@ -56,14 +56,15 @@ class VWAPReversionStrategy(BaseStrategy):
         self._fired.clear()
 
     def _market_is_flat(self) -> bool:
-        """判斷大盤是否為震盪盤（漲跌幅在 ±market_flat_pct 內）。"""
+        """判斷大盤是否為震盪盤（漲跌幅在 ±market_flat_pct 內）。
+        VWAP 回歸策略只在震盪盤啟動，趨勢盤逆勢回歸容易被夾殺。
+        """
         market_symbol: str = self._param("market_symbol", "TAIEX")
-        market_flat_pct: float = self._param("market_flat_pct", 0.005)
+        market_flat_pct: float = self._param("market_flat_pct", 0.008)  # 放寬至 ±0.8%
 
         market_bars = self.cache.get_bars(market_symbol)
         if not market_bars or market_bars[0].open == 0:
-            # 無大盤資料時放寬限制（不強制關閉策略）
-            return True
+            return True  # 無大盤資料時不限制
 
         first_open = market_bars[0].open
         last_close = market_bars[-1].close
