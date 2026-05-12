@@ -41,29 +41,60 @@ _SIGNAL_CUTOFF_HOUR = 13
 _SIGNAL_CUTOFF_MINUTE = 20
 
 
-def _load_universe() -> tuple[list[str], dict[str, str]]:
-    """從 universe.yaml 讀取股票池，回傳 (代號列表, {代號: 名稱} 對照表)。
+import re
 
-    名稱對照表先用代號本身填充（盤前 screener 執行後可更新為真實名稱）。
+# 解析 universe.yaml 中註解格式的中文名：- "3481"   # 群創
+_NAME_PATTERN = re.compile(r'^\s*-\s*"(\d{4,5})"\s*#\s*(\S+)')
+
+
+def _parse_universe_with_names(path) -> tuple[list[str], dict[str, str]]:
+    """逐行讀取 universe.yaml，從註解抓中文名。
+
+    格式範例：- "3481"   # 群創
+    → 代號 3481、名稱「群創」
     """
-    universe_path = settings.PROJECT_ROOT / "config" / "universe.yaml" if hasattr(settings, "PROJECT_ROOT") else None
+    symbols: list[str] = []
+    name_map: dict[str, str] = {}
 
-    # 嘗試讀取設定檔
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            m = _NAME_PATTERN.match(line)
+            if m:
+                sid, name = m.group(1), m.group(2)
+                if sid not in name_map:  # 避免重複
+                    symbols.append(sid)
+                    name_map[sid] = name
+    return symbols, name_map
+
+
+def _load_universe() -> tuple[list[str], dict[str, str]]:
+    """從 universe.yaml 讀取股票池，回傳 (代號列表, {代號: 中文名} 對照表)。
+
+    優先策略：
+      1. 先用 yaml 註解解析中文名（136 檔監控股一定有）
+      2. 廣域掃描新增的股票會在 IntraDayScheduler 啟動時透過 FinMind 補全
+    """
     try:
         from config.settings import PROJECT_ROOT
         path = PROJECT_ROOT / "config" / "universe.yaml"
-        with open(path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-        seeds = data.get("seed_universe", [])
-        etfs = data.get("etf_universe", [])
-        all_symbols = seeds + etfs
+
+        # 從註解解析中文名（最完整）
+        symbols, name_map = _parse_universe_with_names(path)
+
+        # 安全網：若註解解析失敗，退回標準 yaml 讀法（只有代號）
+        if not symbols:
+            with open(path, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            seeds = data.get("seed_universe", [])
+            etfs = data.get("etf_universe", [])
+            symbols = seeds + etfs
+            name_map = {s: s for s in symbols}
+
+        logger.info(f"載入監控池：{len(symbols)} 檔（中文名 {sum(1 for s in symbols if name_map.get(s) != s)} 檔）")
+        return symbols, name_map
     except Exception as e:
         logger.warning(f"無法讀取 universe.yaml：{e}，使用空清單")
-        all_symbols = []
-
-    # 名稱對照（預設用代號，盤前篩選後可注入真實名稱）
-    name_map = {s: s for s in all_symbols}
-    return all_symbols, name_map
+        return [], {}
 
 
 class IntraDayScheduler:
@@ -127,6 +158,34 @@ class IntraDayScheduler:
             all_symbols=_all_scan_syms,
             hot_symbols=self._hot_symbols,
         )
+
+        # 從 FinMind 補全全市場中文名（廣域掃描新增的熱門股也能有名字）
+        self._enrich_names_from_finmind()
+
+    def _enrich_names_from_finmind(self) -> None:
+        """從 FinMind TaiwanStockInfo 載入全市場中文名，補進 name_map。
+
+        失敗（API 限額、網路錯誤）不影響運行，保留 yaml 註解解析的結果。
+        """
+        try:
+            from src.data.finmind_client import FinMindClient
+            client = FinMindClient(token=settings.finmind_token)
+            df = client.stock_info()
+            if df.empty:
+                logger.warning("FinMind stock_info 回傳空，跳過中文名補全")
+                return
+
+            added = 0
+            for _, row in df.iterrows():
+                sid = str(row["stock_id"])
+                nm = str(row["stock_name"]).strip()
+                # 只補：原本沒有 / 原本是代號 = 代號（fallback）
+                if nm and (sid not in self.name_map or self.name_map[sid] == sid):
+                    self.name_map[sid] = nm
+                    added += 1
+            logger.info(f"FinMind 補全中文名 {added} 檔（總 {len(self.name_map)} 檔）")
+        except Exception as e:
+            logger.warning(f"FinMind 中文名補全失敗（不影響系統）：{e}")
 
     # --- 啟動入口 ---
 

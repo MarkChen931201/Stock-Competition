@@ -128,8 +128,77 @@ def build_signal_embed(
             inline=False,
         )
 
-    # --- WATCH 專屬提醒 ---
-    if is_watch:
+    # --- WATCH 專屬：完整交易執行卡 ---
+    if is_watch and signal.extra and "entry_low" in signal.extra:
+        ex = signal.extra
+        direction_word = "做多 LONG" if is_long else "做空 SHORT"
+        action_word = "買進" if is_long else "賣出（融券）"
+
+        # 1️⃣ 進場區間
+        embed.add_embed_field(
+            name="🎯 進場區間（限價）",
+            value=(
+                f"**{ex['entry_low']:.2f} ~ {ex['entry_high']:.2f}**\n"
+                f"建議掛 `{ex['entry_mid']:.2f}` 限價單"
+            ),
+            inline=True,
+        )
+
+        # 2️⃣ 觸發確認價（必須突破才進場）
+        break_word = "突破" if is_long else "跌破"
+        embed.add_embed_field(
+            name=f"⚡ 觸發條件（{break_word}）",
+            value=(
+                f"**{ex['trigger_break']:.2f}**\n"
+                f"{ex['valid_minutes']} 分鐘內未{break_word}則放棄"
+            ),
+            inline=True,
+        )
+
+        # 佔位換行
+        embed.add_embed_field(name="​", value="​", inline=True)
+
+        # 3️⃣ 停損 / 停利 T1 / T2
+        embed.add_embed_field(
+            name="🛑 停損（嚴守）",
+            value=f"**{ex['stop_loss']:.2f}**\n風險 NT${ex['risk_per_lot']:,.0f}/張",
+            inline=True,
+        )
+        embed.add_embed_field(
+            name="✅ 停利 T1 (+1R)",
+            value=f"**{ex['take_profit_1']:.2f}**\n出 1/2 倉",
+            inline=True,
+        )
+        embed.add_embed_field(
+            name="🚀 停利 T2 (+2R)",
+            value=f"**{ex['take_profit_2']:.2f}**\n剩餘 trail",
+            inline=True,
+        )
+
+        # 4️⃣ 建議張數
+        embed.add_embed_field(
+            name="📦 建議下單",
+            value=(
+                f"**{action_word} {ex['suggested_lots']} 張**（{direction_word}）\n"
+                f"單筆風險上限 NT$5,000"
+            ),
+            inline=False,
+        )
+
+        # 5️⃣ 執行步驟摘要
+        steps = (
+            f"1. 確認 `{ex['trigger_break']:.2f}` 被{break_word}（{ex['valid_minutes']}分鐘內）\n"
+            f"2. 在 `{ex['entry_low']:.2f}~{ex['entry_high']:.2f}` 掛限價{action_word} **{ex['suggested_lots']} 張**\n"
+            f"3. 設停損 `{ex['stop_loss']:.2f}`（嚴守不可砍）\n"
+            f"4. 到 `{ex['take_profit_1']:.2f}` 出半倉，剩餘移動停利至 `{ex['take_profit_2']:.2f}`"
+        )
+        embed.add_embed_field(
+            name="📋 執行步驟",
+            value=steps,
+            inline=False,
+        )
+    elif is_watch:
+        # 沒有交易計畫的 WATCH（退回原本提示）
         embed.add_embed_field(
             name="⚠️ 注意",
             value="此為**預警訊號**，請人工確認後再決定是否下單。",
