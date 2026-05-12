@@ -85,12 +85,12 @@ class TrendPullbackStrategy(BaseStrategy):
         if open_minutes < 30 or open_minutes > end_min:
             return None
 
-        # ── 讀取參數 ──
-        min_trend_score:        float = self._param("min_trend_score", 6.0)
-        pullback_from_high_pct: float = self._param("pullback_from_high_pct", 0.005)
-        touch_pct:              float = self._param("touch_pct", 0.005)
-        max_pullback_pct:       float = self._param("max_pullback_pct", 0.015)
-        vol_shrink_ratio:       float = self._param("vol_shrink_ratio", 0.8)
+        # ── 讀取參數（放寬版）──
+        min_trend_score:        float = self._param("min_trend_score", 4.0)     # 放寬：6.0 → 4.0
+        pullback_from_high_pct: float = self._param("pullback_from_high_pct", 0.003)  # 放寬：0.5% → 0.3%
+        touch_pct:              float = self._param("touch_pct", 0.008)         # 放寬：0.5% → 0.8%
+        max_pullback_pct:       float = self._param("max_pullback_pct", 0.020)  # 放寬：1.5% → 2.0%
+        vol_shrink_ratio:       float = self._param("vol_shrink_ratio", 1.0)    # 放寬：0.8 → 1.0
         market_symbol:          str   = self._param("market_symbol", "TAIEX")
 
         close = bar.close

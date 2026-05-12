@@ -43,8 +43,8 @@ class BroadScanner:
         self,
         all_symbols: list[str],
         hot_symbols: set[str],
-        change_threshold: float = 0.02,   # 漲跌幅 > 2% 視為異動
-        vol_ratio_threshold: float = 2.0, # 成交量 > 前20日均量 2 倍
+        change_threshold: float = 0.012,  # 放寬：2% → 1.2% 視為異動
+        vol_ratio_threshold: float = 1.5, # 放寬：2 倍 → 1.5 倍
         top_n: int = _TOP_N,
     ):
         self.all_symbols   = all_symbols

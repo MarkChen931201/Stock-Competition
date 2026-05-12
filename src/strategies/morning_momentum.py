@@ -66,14 +66,14 @@ class MorningMomentumStrategy(BaseStrategy):
         if len(all_bars) < 5:
             return None
 
-        # ── 讀取參數（v2 調整門檻）──
-        momentum_pct:    float = self._param("momentum_pct", 0.012)   # v2: 0.02 → 0.012
-        vol_ratio:       float = self._param("vol_ratio", 1.5)
-        consec_bars:     int   = self._param("consec_bars", 2)         # v2: 3 → 2
+        # ── 讀取參數（放寬版：更早發訊號）──
+        momentum_pct:    float = self._param("momentum_pct", 0.008)    # 放寬：1.2% → 0.8%
+        vol_ratio:       float = self._param("vol_ratio", 1.2)         # 放寬：1.5 → 1.2
+        consec_bars:     int   = self._param("consec_bars", 2)
         stop_loss_pct:   float = self._param("stop_loss_pct", 0.01)
-        profit_ratio:    float = self._param("profit_ratio", 1.5)      # v2: 2.0 → 1.5
-        trail_profit_r:  float = self._param("trail_profit_r", 3.0)    # 新增
-        min_trend_score: float = self._param("min_trend_score", 5.0)   # 新增
+        profit_ratio:    float = self._param("profit_ratio", 1.5)
+        trail_profit_r:  float = self._param("trail_profit_r", 3.0)
+        min_trend_score: float = self._param("min_trend_score", 3.5)   # 放寬：5.0 → 3.5
         market_symbol:   str   = self._param("market_symbol", "TAIEX")
 
         close      = bar.close

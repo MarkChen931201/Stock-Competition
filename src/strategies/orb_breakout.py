@@ -78,19 +78,19 @@ class ORBBreakoutStrategy(BaseStrategy):
         if bar is None:
             return None
 
-        # ── 讀取參數 ──
-        volume_ratio: float  = self._param("volume_ratio", 1.5)
+        # ── 讀取參數（放寬版）──
+        volume_ratio: float  = self._param("volume_ratio", 1.2)        # 放寬：1.5 → 1.2
         rsi_period: int      = self._param("rsi_period", 6)
-        rsi_low: float       = self._param("rsi_low", 40.0)
-        rsi_high: float      = self._param("rsi_high", 85.0)
+        rsi_low: float       = self._param("rsi_low", 35.0)            # 放寬：40 → 35
+        rsi_high: float      = self._param("rsi_high", 88.0)           # 放寬：85 → 88
         stop_loss_pct: float = self._param("stop_loss_pct", 0.008)
         profit_ratio: float  = self._param("profit_ratio", 1.5)
         market_symbol: str   = self._param("market_symbol", "TAIEX")
-        min_orb_pct: float   = self._param("min_orb_pct", 0.015)  # 回測最佳：1.5%
-        market_long_th: float  = self._param("market_long_th", -0.003)
-        market_short_th: float = self._param("market_short_th", 0.003)
-        time_cutoff_hour: int  = self._param("time_cutoff_hour", 11)   # 11:00 後不開新倉
-        time_cutoff_min: int   = self._param("time_cutoff_min", 0)
+        min_orb_pct: float   = self._param("min_orb_pct", 0.010)       # 放寬：1.5% → 1.0%
+        market_long_th: float  = self._param("market_long_th", -0.005)  # 放寬：-0.3% → -0.5%
+        market_short_th: float = self._param("market_short_th", 0.005)  # 放寬：0.3% → 0.5%
+        time_cutoff_hour: int  = self._param("time_cutoff_hour", 11)   # 11:30 後不開新倉
+        time_cutoff_min: int   = self._param("time_cutoff_min", 30)    # 放寬：11:00 → 11:30
 
         close = bar.close
         current_vol = bar.volume
@@ -144,8 +144,8 @@ class ORBBreakoutStrategy(BaseStrategy):
         # ── 內外盤比（外盤比）：確認主動買賣方向 ──
         book = self.cache.get_last_book(symbol)
         uptick = book.uptick_ratio if book else 0.5
-        uptick_long_min:  float = self._param("uptick_long_min", 0.47)
-        uptick_short_max: float = self._param("uptick_short_max", 0.53)
+        uptick_long_min:  float = self._param("uptick_long_min", 0.43)   # 放寬：0.47 → 0.43
+        uptick_short_max: float = self._param("uptick_short_max", 0.57)  # 放寬：0.53 → 0.57
 
         # ── 新增：即將突破 WATCH 預警（早一步告知）──
         approach_pct: float = self._param("approach_pct", 0.003)

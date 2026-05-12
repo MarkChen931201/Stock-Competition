@@ -127,16 +127,16 @@ class IntraDayScheduler:
         self._trailing = TrailingStopManager(notifier=self._notifier)
         # 籌碼面資料（盤前載入昨日）
         self._inst = InstitutionalLoader(token=settings.finmind_token)
-        # 評分系統 v3：8 維度滿分 16，門檻 7.0（約 44%）
+        # 評分系統 v3：8 維度滿分 16，門檻 5.5（約 34%）— 放寬版
         # 新增第 8 維「趨勢分數」，需要 cache 才能計算
-        self._scorer = SignalScorer(inst_loader=self._inst, min_score=7.0, cache=self.cache)
+        self._scorer = SignalScorer(inst_loader=self._inst, min_score=5.5, cache=self.cache)
         self._dispatcher = SignalDispatcher(
             notifier=self._notifier,
-            min_profit_pct=0.008,
-            cooldown_minutes=5,
+            min_profit_pct=0.006,         # 放寬：0.8% → 0.6%
+            cooldown_minutes=3,           # 放寬：5 → 3 分鐘
             trailing_stop_manager=self._trailing,
             signal_scorer=self._scorer,
-            cache=self.cache,  # v3 新增：流動性過濾需要
+            cache=self.cache,
         )
         # 快速 OBI 輪詢（前 20 核心股，每 8 秒）— 平衡型擴大
         # 20 檔 × 1s/檔 + 8s 等待 = 28s/輪 → ~43 req/min（仍安全）

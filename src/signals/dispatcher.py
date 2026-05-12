@@ -23,10 +23,10 @@ from src.strategies.base import Signal, SignalType, Direction
 # 判斷是否為 ETF 的代號前綴 / 後綴（台股 ETF 代號通常以 0 開頭或含英文）
 _ETF_PREFIXES = ("00", "0050", "0056")
 
-# 流動性過濾門檻（過濾冷門股、窄幅股，例如葡萄王 1707）
-_MIN_TOTAL_VOLUME_LOTS   = 1000    # 今日累積總成交量 >= 1000 張
-_MIN_DAILY_AMPLITUDE_PCT = 0.012   # 當日振幅 >= 1.2%（過濾窄幅震盪）
-_MIN_RECENT_VOLUME_LOTS  = 30      # 最近 1 根 K 棒 >= 30 張（過濾現在沒人交易）
+# 流動性過濾門檻（放寬版：仍能過濾葡萄王 1707，但讓中型股有機會）
+_MIN_TOTAL_VOLUME_LOTS   = 500     # 今日累積總成交量 >= 500 張（放寬：1000→500）
+_MIN_DAILY_AMPLITUDE_PCT = 0.010   # 當日振幅 >= 1.0%（放寬：1.2%→1.0%）
+_MIN_RECENT_VOLUME_LOTS  = 20      # 最近 1 根 K 棒 >= 20 張（放寬：30→20）
 
 
 def _infer_asset_type(symbol: str) -> AssetType:

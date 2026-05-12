@@ -153,11 +153,11 @@ class OBIBurstStrategy(BaseStrategy):
 
     def generate_signal(self, symbol: str, stock_name: str) -> Signal | None:
         """在每根 bar 更新後呼叫，結合 weighted_obi + best_level_ratio 判斷。"""
-        w_obi_threshold: float = self._param("w_obi_threshold", 0.4)   # 加權 OBI 門檻
-        blr_threshold:   float = self._param("blr_threshold", 0.55)    # 買一壓力比門檻
+        w_obi_threshold: float = self._param("w_obi_threshold", 0.3)   # 放寬：0.4 → 0.3
+        blr_threshold:   float = self._param("blr_threshold", 0.52)    # 放寬：0.55 → 0.52
         consecutive:     int   = self._param("consecutive", 2)
-        top_vol_pct:     float = self._param("top_vol_pct", 0.15)
-        cooldown_bars:   int   = self._param("cooldown_bars", 5)
+        top_vol_pct:     float = self._param("top_vol_pct", 0.25)      # 放寬：前 15% → 前 25%
+        cooldown_bars:   int   = self._param("cooldown_bars", 3)       # 放寬：5 → 3 根
 
         history = self._obi_history.get(symbol)
         if not history or len(history) < consecutive:
