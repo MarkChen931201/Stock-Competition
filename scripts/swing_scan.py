@@ -37,20 +37,21 @@ from loguru import logger
 
 from config.settings import settings
 from src.data.finmind_client import FinMindClient
+from src.data.fundamentals import FundamentalsFetcher
 from src.notifier.discord_bot import DiscordNotifier
 from src.notifier.swing_embed import (
     build_confirm_embed,
     build_exit_embed,
     build_holding_check_embed,
-    build_preselect_embed,
+    build_preselect_embeds,
 )
 from src.risk.swing_position import SwingPosition, SwingPositionManager, SwingStatus
 from src.strategies.swing_breakout import SwingCandidate, evaluate
 
 # 設定
-_LOOKBACK_DAYS = 30        # 抓 30 天日線（夠算 20EMA + 10 日突破）
-_TOP_N         = 5          # 預選 Top 5
-_MAX_RISK_NTD  = 100_000    # 單筆風險上限
+_LOOKBACK_DAYS = 60        # 抓 60 天日線（夠算 MACD/KD/布林）
+_TOP_N         = 10        # 預選 Top 10（從 5 擴大）
+_MAX_RISK_NTD  = 100_000   # 單筆風險上限
 
 
 def _load_universe_with_names() -> list[tuple[str, str]]:
@@ -132,9 +133,17 @@ def cmd_preselect() -> None:
         logger.info("無符合條件標的，跳過推播")
         return
 
-    # 推預選清單
-    embed = build_preselect_embed(top)
-    notifier._send(embed)
+    # 抓 Top N 的基本面資料（EPS / 月營收 / PER）
+    logger.info(f"抓取 Top {len(top)} 基本面資料...")
+    fundamentals_fetcher = FundamentalsFetcher(token=settings.finmind_token)
+    top_symbols = [c.symbol for c in top]
+    fundamentals = fundamentals_fetcher.fetch_batch(top_symbols)
+
+    # 推預選清單（拆多則 embed，每則 5 檔）
+    embeds = build_preselect_embeds(top, fundamentals, per_embed=5)
+    for embed in embeds:
+        notifier._send(embed)
+    logger.info(f"已推播 {len(embeds)} 則預選 embed")
 
     # 寫入 swing_positions.json（status=WAITING）
     next_trading_day = (today + timedelta(days=1)).strftime("%Y-%m-%d")

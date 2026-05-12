@@ -1,0 +1,115 @@
+{
+  "date": "2026-05-13",
+  "symbols": {
+    "2409": {
+      "symbol": "2409",
+      "eps_latest": 0.38,
+      "eps_quarter": "2025Q4",
+      "revenue_yoy_pct": -4.5,
+      "revenue_mom_pct": -15.1,
+      "revenue_month": "2026-05",
+      "per": 22.8,
+      "pbr": 1.03,
+      "dividend_yield": 1.93
+    },
+    "3035": {
+      "symbol": "3035",
+      "eps_latest": 0.8,
+      "eps_quarter": "2025Q4",
+      "revenue_yoy_pct": -43.1,
+      "revenue_mom_pct": -9.3,
+      "revenue_month": "2026-05",
+      "per": 74.2,
+      "pbr": 4.16,
+      "dividend_yield": 0.86
+    },
+    "8069": {
+      "symbol": "8069",
+      "eps_latest": 0.97,
+      "eps_quarter": "2025Q4",
+      "revenue_yoy_pct": -12.6,
+      "revenue_mom_pct": -10.9,
+      "revenue_month": "2026-05",
+      "per": 21.4,
+      "pbr": 3.28,
+      "dividend_yield": 3.02
+    },
+    "3036": {
+      "symbol": "3036",
+      "eps_latest": 3.5,
+      "eps_quarter": "2025Q4",
+      "revenue_yoy_pct": 78.7,
+      "revenue_mom_pct": 8.7,
+      "revenue_month": "2026-05",
+      "per": 28.5,
+      "pbr": 3.28,
+      "dividend_yield": 2.83
+    },
+    "3481": {
+      "symbol": "3481",
+      "eps_latest": 0.0,
+      "eps_quarter": "2025Q4",
+      "revenue_yoy_pct": 11.8,
+      "revenue_mom_pct": -15.0,
+      "revenue_month": "2026-05",
+      "per": 1183.3,
+      "pbr": 1.28,
+      "dividend_yield": 2.82
+    },
+    "2344": {
+      "symbol": "2344",
+      "eps_latest": 2.25,
+      "eps_quarter": "2026Q1",
+      "revenue_yoy_pct": 182.2,
+      "revenue_mom_pct": 32.7,
+      "revenue_month": "2026-05",
+      "per": 36.0,
+      "pbr": 4.69,
+      "dividend_yield": 0.41
+    },
+    "6282": {
+      "symbol": "6282",
+      "eps_latest": 0.27,
+      "eps_quarter": "2026Q1",
+      "revenue_yoy_pct": 34.6,
+      "revenue_mom_pct": 0.2,
+      "revenue_month": "2026-05",
+      "per": 112.0,
+      "pbr": 2.13,
+      "dividend_yield": 1.43
+    },
+    "2303": {
+      "symbol": "2303",
+      "eps_latest": 1.29,
+      "eps_quarter": "2026Q1",
+      "revenue_yoy_pct": 10.8,
+      "revenue_mom_pct": 8.8,
+      "revenue_month": "2026-05",
+      "per": 26.3,
+      "pbr": 3.23,
+      "dividend_yield": 2.49
+    },
+    "2408": {
+      "symbol": "2408",
+      "eps_latest": 8.41,
+      "eps_quarter": "2026Q1",
+      "revenue_yoy_pct": 717.3,
+      "revenue_mom_pct": 40.3,
+      "revenue_month": "2026-05",
+      "per": 28.7,
+      "pbr": 5.16,
+      "dividend_yield": 0.47
+    },
+    "3008": {
+      "symbol": "3008",
+      "eps_latest": 46.63,
+      "eps_quarter": "2026Q1",
+      "revenue_yoy_pct": 22.6,
+      "revenue_mom_pct": -1.1,
+      "revenue_month": "2026-05",
+      "per": 17.4,
+      "pbr": 1.98,
+      "dividend_yield": 2.86
+    }
+  }
+}

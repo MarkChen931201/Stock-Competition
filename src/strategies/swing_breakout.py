@@ -56,17 +56,27 @@ class SwingCandidate:
     vol_ratio: float      # 當日量 / 20 日均量
     avg_vol_lots: float   # 20 日平均量（張）
 
+    # 強化技術指標
+    macd: float = 0.0           # MACD 柱
+    macd_signal: float = 0.0    # MACD 訊號線
+    macd_hist: float = 0.0      # MACD 柱狀（diff - signal）
+    k_value: float = 50.0       # KD 隨機指標 K
+    d_value: float = 50.0       # KD 隨機指標 D
+    consec_red_bars: int = 0    # 連續紅 K 天數
+    bb_position_pct: float = 50.0  # 布林通道位置（0~100）
+    change_pct: float = 0.0     # 當日漲跌幅 %
+
     # 進場建議
-    entry_limit: float    # 建議隔日限價（收盤 +0.3%，floor 到 tick）
-    stop_loss: float      # 停損價
-    take_profit_1: float  # 第一目標 +6%
-    take_profit_2: float  # 第二目標 +12%
-    risk_per_share: float
-    suggested_lots: int
+    entry_limit: float = 0.0
+    stop_loss: float = 0.0
+    take_profit_1: float = 0.0
+    take_profit_2: float = 0.0
+    risk_per_share: float = 0.0
+    suggested_lots: int = 0
 
     # 加分項
-    market_change_pct: float
-    inst_net_buy_lots: int | None  # 法人合計買超張（None 表示無資料）
+    market_change_pct: float = 0.0
+    inst_net_buy_lots: int | None = None
 
 
 def _ema(series: pd.Series, period: int) -> float:
@@ -87,6 +97,59 @@ def _rsi(closes: pd.Series, period: int = 14) -> float:
         return 100.0
     rs = gain / loss
     return float(100 - 100 / (1 + rs))
+
+
+def _macd(closes: pd.Series) -> tuple[float, float, float]:
+    """MACD 計算（12, 26, 9）。回傳 (DIF, MACD訊號線, 柱狀)。"""
+    if len(closes) < 35:
+        return 0.0, 0.0, 0.0
+    ema12 = closes.ewm(span=12, adjust=False).mean()
+    ema26 = closes.ewm(span=26, adjust=False).mean()
+    dif = ema12 - ema26
+    signal = dif.ewm(span=9, adjust=False).mean()
+    hist = dif - signal
+    return float(dif.iloc[-1]), float(signal.iloc[-1]), float(hist.iloc[-1])
+
+
+def _kd(highs: pd.Series, lows: pd.Series, closes: pd.Series, period: int = 9) -> tuple[float, float]:
+    """KD 隨機指標。回傳 (K, D)。"""
+    if len(closes) < period:
+        return 50.0, 50.0
+    low_n  = lows.rolling(period).min()
+    high_n = highs.rolling(period).max()
+    rsv = (closes - low_n) / (high_n - low_n) * 100
+    # K = 上一日 K × 2/3 + RSV × 1/3
+    k = rsv.ewm(alpha=1/3, adjust=False).mean()
+    d = k.ewm(alpha=1/3, adjust=False).mean()
+    return float(k.iloc[-1]), float(d.iloc[-1])
+
+
+def _bollinger_position(closes: pd.Series, period: int = 20, num_std: float = 2.0) -> float:
+    """布林通道位置（0~100，越高表示越接近上軌）。"""
+    if len(closes) < period:
+        return 50.0
+    sma = closes.rolling(period).mean().iloc[-1]
+    std = closes.rolling(period).std().iloc[-1]
+    if std == 0 or pd.isna(std):
+        return 50.0
+    upper = sma + num_std * std
+    lower = sma - num_std * std
+    last = closes.iloc[-1]
+    if upper == lower:
+        return 50.0
+    pos = (last - lower) / (upper - lower) * 100
+    return max(0.0, min(100.0, float(pos)))
+
+
+def _consec_red_bars(opens: pd.Series, closes: pd.Series) -> int:
+    """連續紅 K 天數（從最新一根往回算）。"""
+    n = 0
+    for o, c in zip(reversed(opens.tolist()), reversed(closes.tolist())):
+        if c >= o:
+            n += 1
+        else:
+            break
+    return n
 
 
 def evaluate(
@@ -115,16 +178,21 @@ def evaluate(
 
     # 標準化欄位（FinMind 不同版本可能用 close 或 Close）
     close_col = "close" if "close" in df.columns else "Close"
+    open_col  = "open" if "open" in df.columns else "Open"
     high_col  = "max" if "max" in df.columns else ("high" if "high" in df.columns else "High")
     low_col   = "min" if "min" in df.columns else ("low"  if "low"  in df.columns else "Low")
     vol_col   = "Trading_Volume" if "Trading_Volume" in df.columns else (
                 "trading_volume" if "trading_volume" in df.columns else "volume")
 
     closes  = df[close_col].astype(float)
+    opens   = df[open_col].astype(float)
     highs   = df[high_col].astype(float)
+    lows    = df[low_col].astype(float)
     volumes = df[vol_col].astype(float)
 
     last_close = float(closes.iloc[-1])
+    prev_close = float(closes.iloc[-2]) if len(closes) >= 2 else last_close
+    change_pct = (last_close - prev_close) / prev_close * 100 if prev_close > 0 else 0.0
 
     # ── 流動性過濾 ──
     if last_close < 10:    # 股價太低
@@ -157,6 +225,12 @@ def evaluate(
     rsi14 = _rsi(closes, 14)
     if not (50 <= rsi14 <= 80):
         return None
+
+    # ── 強化技術指標（不過濾，只是顯示）──
+    macd_dif, macd_sig, macd_hist = _macd(closes)
+    k_val, d_val = _kd(highs, lows, closes, period=9)
+    bb_pos = _bollinger_position(closes, period=20)
+    consec_red = _consec_red_bars(opens, closes)
 
     # ── 通過所有硬條件，開始評分 ──
     breakdown = {}
@@ -228,6 +302,14 @@ def evaluate(
         rsi14=round(rsi14, 1),
         vol_ratio=round(vol_ratio, 2),
         avg_vol_lots=round(avg_vol_lots, 0),
+        macd=round(macd_dif, 3),
+        macd_signal=round(macd_sig, 3),
+        macd_hist=round(macd_hist, 3),
+        k_value=round(k_val, 1),
+        d_value=round(d_val, 1),
+        consec_red_bars=consec_red,
+        bb_position_pct=round(bb_pos, 1),
+        change_pct=round(change_pct, 2),
         entry_limit=entry_limit,
         stop_loss=stop_loss,
         take_profit_1=take_profit_1,
