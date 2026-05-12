@@ -17,6 +17,8 @@ import httpx
 import pandas as pd
 from loguru import logger
 
+from src.data.blacklist import is_blacklisted
+
 
 # ── 交易成本常數 ──
 BROKER_FEE_RATE = 0.001425
@@ -92,14 +94,19 @@ class ORBBacktestEngine:
 
     def __init__(
         self,
-        volume_ratio:     float = 1.5,
-        min_orb_pct:      float = 0.008,
+        # v2: 同步最新 strategies/orb_breakout.py 參數
+        volume_ratio:     float = 1.2,         # 1.5 → 1.2（同步放寬版）
+        min_orb_pct:      float = 0.010,       # 0.8% → 1.0%
         stop_loss_pct:    float = 0.008,
         profit_ratio:     float = 1.5,
         use_trailing:     bool  = True,
-        max_hold_bars:    int   = 90,    # 最多持倉 90 分鐘（到 10:30）
-        early_exit_bars:  int   = 15,    # 15 分鐘時間停損
-        early_exit_r:     float = 0.3,   # 未達 0.3R 就出場
+        max_hold_bars:    int   = 90,
+        early_exit_bars:  int   = 15,
+        early_exit_r:     float = 0.3,
+        # v2 新增：黑名單 + 流動性過濾
+        use_blacklist:    bool  = True,
+        min_total_volume_lots:   int   = 500,    # 累積量門檻
+        min_daily_amplitude_pct: float = 0.010,  # 振幅門檻
     ):
         self.volume_ratio    = volume_ratio
         self.min_orb_pct     = min_orb_pct
@@ -107,8 +114,11 @@ class ORBBacktestEngine:
         self.profit_ratio    = profit_ratio
         self.use_trailing    = use_trailing
         self.max_hold_bars   = max_hold_bars
-        self.early_exit_bars = early_exit_bars   # 新增
-        self.early_exit_r    = early_exit_r      # 新增
+        self.early_exit_bars = early_exit_bars
+        self.early_exit_r    = early_exit_r
+        self.use_blacklist   = use_blacklist
+        self.min_total_volume_lots   = min_total_volume_lots
+        self.min_daily_amplitude_pct = min_daily_amplitude_pct
 
     def run_day(
         self,
@@ -120,6 +130,22 @@ class ORBBacktestEngine:
         """對單一股票單一交易日執行回測，回傳所有交易紀錄。"""
         if bars.empty or len(bars) < 20:
             return []
+
+        # v2: 黑名單過濾
+        if self.use_blacklist and is_blacklisted(symbol):
+            return []
+
+        # v2: 流動性過濾（累積量 + 振幅）
+        total_vol_lots = float(bars["volume"].sum())   # 1分K的 volume 單位是張
+        if total_vol_lots < self.min_total_volume_lots:
+            return []
+        day_high = float(bars["high"].max())
+        day_low  = float(bars["low"].min())
+        day_open = float(bars["open"].iloc[0])
+        if day_open > 0:
+            amplitude = (day_high - day_low) / day_open
+            if amplitude < self.min_daily_amplitude_pct:
+                return []
 
         bars = bars.copy().sort_values("time").reset_index(drop=True)
 

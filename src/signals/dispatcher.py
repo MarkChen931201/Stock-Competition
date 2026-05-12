@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from loguru import logger
 
+from src.data.blacklist import is_blacklisted, reason as blacklist_reason
 from src.data.cache import IntraDayCache
 from src.notifier.discord_bot import DiscordNotifier
 from src.notifier.embed_builder import build_signal_embed
@@ -70,6 +71,7 @@ class SignalDispatcher:
         self._rejected_dedup = 0
         self._rejected_score = 0
         self._rejected_liquidity = 0   # 流動性過濾
+        self._rejected_blacklist = 0   # 黑名單過濾
 
     def reset(self) -> None:
         """每日開盤前呼叫，重置去重狀態與統計。"""
@@ -79,6 +81,7 @@ class SignalDispatcher:
         self._rejected_dedup = 0
         self._rejected_score = 0
         self._rejected_liquidity = 0
+        self._rejected_blacklist = 0
 
     @property
     def stats(self) -> dict:
@@ -88,6 +91,7 @@ class SignalDispatcher:
             "rejected_dedup": self._rejected_dedup,
             "rejected_score": self._rejected_score,
             "rejected_liquidity": self._rejected_liquidity,
+            "rejected_blacklist": self._rejected_blacklist,
         }
 
     def _check_liquidity(self, signal: Signal) -> tuple[bool, str]:
@@ -135,6 +139,12 @@ class SignalDispatcher:
         """
         lots = lots or self._default_lots
         asset_type = _infer_asset_type(signal.symbol)
+
+        # --- Step -1: 黑名單過濾（回測連續虧損股，不再發訊號）---
+        if is_blacklisted(signal.symbol):
+            logger.info(f"[{signal.symbol}] REJECT（黑名單）{blacklist_reason(signal.symbol)}")
+            self._rejected_blacklist += 1
+            return False
 
         # --- Step 0: 流動性過濾（過濾葡萄王這類冷門股 / 窄幅股）---
         ok, reason = self._check_liquidity(signal)
