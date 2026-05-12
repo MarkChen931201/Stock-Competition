@@ -227,16 +227,18 @@ class IntraDayScheduler:
         self._fugle.on_bar(self._on_bar)
         self._quote.on_quote(self._on_quote)
 
-        # 並行跑：一般Quote + 快速OBI + K棒輪詢 + 廣域掃描 + 收盤監控 + 排行榜 + 熱門股同步
+        # 並行跑：一般Quote + 快速OBI + K棒輪詢 + 廣域掃描 + 收盤監控 + 排行榜 + 熱門股同步 + 波段策略
         try:
             await asyncio.gather(
                 self._quote.run(),
-                self._fast_quote.run(),   # 前 20 核心股 8s 快速輪詢
+                self._fast_quote.run(),
                 self._closing_monitor(),
                 self._bar_polling_loop(),
                 self._broad_scanner.run(),
-                self._morning_ranking_task(),   # 09:30 排行榜（之前漏掛）
-                self._sync_hot_symbols_task(),  # 熱門股動態加入慢輪詢
+                self._morning_ranking_task(),
+                self._sync_hot_symbols_task(),
+                self._swing_confirm_task(),     # 09:35 波段進場確認
+                self._swing_preselect_task(),   # 13:35 波段盤後預選
             )
         except asyncio.CancelledError:
             logger.info("Scheduler 收到取消訊號，開始關閉…")
@@ -408,6 +410,63 @@ class IntraDayScheduler:
                     )
             except Exception as e:
                 logger.warning(f"熱門股同步失敗：{e}")
+
+    async def _swing_preselect_task(self) -> None:
+        """每日 13:35 執行盤後波段預選 + 持倉檢查。"""
+        await self._wait_until_and_run(
+            target_hour=13, target_minute=35,
+            label="波段盤後預選",
+            cli_arg="preselect",
+        )
+
+    async def _swing_confirm_task(self) -> None:
+        """每日 09:35 執行波段進場確認。"""
+        await self._wait_until_and_run(
+            target_hour=9, target_minute=35,
+            label="波段開盤確認",
+            cli_arg="confirm",
+        )
+
+    async def _wait_until_and_run(
+        self, target_hour: int, target_minute: int, label: str, cli_arg: str
+    ) -> None:
+        """等到指定時間後，呼叫 swing_scan.py 對應指令。
+
+        - 若現在 < 目標時間 → 等到目標
+        - 若已過目標 < 30 分鐘 → 30 秒後補執行
+        - 若已過 ≥ 30 分鐘 → 跳過今日
+        """
+        now = datetime.now()
+        target = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+        delta_sec = (target - now).total_seconds()
+
+        if delta_sec > 0:
+            wait_sec = delta_sec
+            logger.info(f"{label} 將於 {wait_sec:.0f} 秒後執行（{target_hour:02d}:{target_minute:02d}）")
+        elif -1800 <= delta_sec <= 0:
+            wait_sec = 30
+            logger.info(f"{label} 已過 {-delta_sec:.0f} 秒，30 秒後補執行")
+        else:
+            logger.info(f"{label} 已過 {-delta_sec/60:.0f} 分鐘，跳過今日")
+            return
+
+        await asyncio.sleep(wait_sec)
+
+        try:
+            from pathlib import Path
+            script = Path(__file__).resolve().parent.parent / "scripts" / "swing_scan.py"
+            proc = await asyncio.create_subprocess_exec(
+                "python3", str(script), "--mode", cli_arg,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode == 0:
+                logger.info(f"✅ {label} 執行完成")
+            else:
+                logger.warning(f"{label} 失敗（exit {proc.returncode}）：{stdout.decode()[:500]}")
+        except Exception as e:
+            logger.exception(f"{label} 例外：{e}")
 
     async def _morning_ranking_task(self) -> None:
         """等到 09:30 推播全市場早盤排行榜。
