@@ -133,7 +133,8 @@ class FugleQuoteClient:
         logger.info(f"Fugle Quote 輪詢啟動，間隔 {self._poll_interval}s，共 {len(self._symbols)} 檔，每檔間隔 1s")
         while self._running:
             try:
-                for symbol in self._symbols:
+                # 用 list() 拷貝，允許運行中動態 add_symbols 不影響本輪迭代
+                for symbol in list(self._symbols):
                     if not self._running:
                         break
                     try:

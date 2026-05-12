@@ -135,9 +135,10 @@ class IntraDayScheduler:
             trailing_stop_manager=self._trailing,
             signal_scorer=self._scorer,
         )
-        # 快速 OBI 輪詢（前 10 核心股，每 5 秒）— 解決速度問題
+        # 快速 OBI 輪詢（前 20 核心股，每 8 秒）— 平衡型擴大
+        # 20 檔 × 1s/檔 + 8s 等待 = 28s/輪 → ~43 req/min（仍安全）
         self._fast_quote = FugleQuoteClient(
-            api_key=settings.fugle_api_key, poll_interval=5.0
+            api_key=settings.fugle_api_key, poll_interval=8.0
         )
 
         # --- 四個策略（共享同一個 cache）---
@@ -208,12 +209,12 @@ class IntraDayScheduler:
         self._fugle.add_symbols(fugle_symbols)
         logger.info(f"Fugle WebSocket 訂閱（tick）：{fugle_symbols}")
 
-        # Fugle Quote 輪詢：一般頻率（前 10 以外的股票，30s）
-        self._quote.add_symbols(self.symbols[10:])
+        # Fugle Quote 輪詢：一般頻率（前 20 以外的股票，30s）
+        self._quote.add_symbols(self.symbols[20:])
 
-        # 快速 OBI 輪詢：前 10 核心股，5s 輪詢（更即時的委託簿）
-        # 5s × 10檔 × 1s間隔 = 15s/輪 = 4輪/分 = 40 req/min → 安全
-        self._fast_quote.add_symbols(self.symbols[:10])
+        # 快速 OBI 輪詢：前 20 核心股，8s 輪詢（從 10 檔擴大到 20 檔）
+        # 20 檔 × 1s/檔 + 8s 等待 = 28s/輪 ≈ 43 req/min → 安全
+        self._fast_quote.add_symbols(self.symbols[:20])
         self._fast_quote.on_quote(self._on_quote)  # 共用同一個 callback
 
         # 掛上 callback
@@ -221,14 +222,16 @@ class IntraDayScheduler:
         self._fugle.on_bar(self._on_bar)
         self._quote.on_quote(self._on_quote)
 
-        # 並行跑：一般Quote + 快速OBI + K棒輪詢 + 廣域掃描 + 收盤監控
+        # 並行跑：一般Quote + 快速OBI + K棒輪詢 + 廣域掃描 + 收盤監控 + 排行榜 + 熱門股同步
         try:
             await asyncio.gather(
                 self._quote.run(),
-                self._fast_quote.run(),   # 前 10 核心股 5s 快速輪詢
+                self._fast_quote.run(),   # 前 20 核心股 8s 快速輪詢
                 self._closing_monitor(),
                 self._bar_polling_loop(),
                 self._broad_scanner.run(),
+                self._morning_ranking_task(),   # 09:30 排行榜（之前漏掛）
+                self._sync_hot_symbols_task(),  # 熱門股動態加入慢輪詢
             )
         except asyncio.CancelledError:
             logger.info("Scheduler 收到取消訊號，開始關閉…")
@@ -373,18 +376,66 @@ class IntraDayScheduler:
             # 等到下一輪（60 秒後）
             await asyncio.sleep(60)
 
+    async def _sync_hot_symbols_task(self) -> None:
+        """定期把廣域掃描的熱門股加入慢輪詢（每 2 分鐘檢查一次）。
+
+        效果：熱門股可享有完整的 OBI / 五檔 / 內外盤比資料，
+        進而能在 OBI 策略中觸發訊號（之前只有 K 線會觸發，OBI 不會）。
+        """
+        # 啟動後等 30 秒再開始（讓系統穩定）
+        await asyncio.sleep(30)
+        universe_set = set(self.symbols)
+
+        while True:
+            await asyncio.sleep(120)  # 每 2 分鐘
+            try:
+                new_hot = self._hot_symbols - universe_set
+                if not new_hot:
+                    continue
+
+                before = len(self._quote._symbols)
+                self._quote.add_symbols(list(new_hot))
+                added = len(self._quote._symbols) - before
+                if added > 0:
+                    total = len(self._quote._symbols)
+                    logger.info(
+                        f"熱門股動態加入慢輪詢：+{added} 檔（總 {total} 檔，含 universe 外熱門 {len(new_hot)} 檔）"
+                    )
+            except Exception as e:
+                logger.warning(f"熱門股同步失敗：{e}")
+
     async def _morning_ranking_task(self) -> None:
-        """等到 09:30 推播全市場早盤排行榜（啟動後至少等 30 秒讓 TWSE 穩定）。"""
+        """等到 09:30 推播全市場早盤排行榜。
+
+        策略：
+          - 若現在 < 09:30 → 等到 09:30 推播
+          - 若 09:30 ≤ 現在 ≤ 10:00 → 立刻補推（剛過不久，資料仍有效）
+          - 若 > 10:00 → 跳過今天（資料已過時，明天系統重啟會自動處理）
+        """
         now = datetime.now()
         target = now.replace(hour=9, minute=30, second=0, microsecond=0)
-        wait_sec = max((target - now).total_seconds(), 30)
-        if wait_sec > 0:
-            logger.info(f"早盤排行榜將於 {wait_sec:.0f} 秒後推播")
-            await asyncio.sleep(wait_sec)
+        delta_sec = (target - now).total_seconds()
+
+        # 計算等待秒數
+        if delta_sec > 0:
+            # 未到 09:30 → 等到目標時間
+            wait_sec = delta_sec
+            logger.info(f"早盤排行榜將於 {wait_sec:.0f} 秒後（09:30）推播")
+        elif -1800 <= delta_sec <= 0:
+            # 09:30 ~ 10:00 → 立刻補推（給系統 30 秒讓 TWSE 穩定）
+            wait_sec = 30
+            logger.info(f"已過 09:30 共 {-delta_sec:.0f} 秒，30 秒後補推早盤排行榜")
+        else:
+            # 已過 10:00 → 跳過今天
+            logger.info(f"已過 10:00（{-delta_sec/60:.0f} 分鐘），跳過今日早盤排行榜")
+            return
+
+        await asyncio.sleep(wait_sec)
 
         try:
             from scripts.morning_ranking import run as ranking_run
             await ranking_run(top_n=20)
+            logger.info("✅ 早盤排行榜推播完成")
         except Exception as e:
             logger.exception(f"早盤排行榜失敗：{e}")
 

@@ -18,7 +18,8 @@ from src.data.twse_client import OrderBook
 from src.strategies.base import BaseStrategy, Direction, Signal, SignalType
 
 # 交易計畫常數
-_MAX_RISK_NTD       = 5000      # 單筆最大風險（NT$）
+_MAX_RISK_NTD       = 100000    # 單筆最大風險（NT$ 10 萬，配合競賽 1000 萬資金）
+_MAX_LOTS_PER_TRADE = 50        # 單筆最大張數（避免低價股暴量）
 _LOT_SIZE           = 1000      # 1 張 = 1000 股
 _COST_RATE          = 0.005     # 來回成本約 0.5%（手續費 + 證交稅）
 _STOP_BUFFER        = 0.003     # 停損緩衝 0.3%
@@ -98,8 +99,8 @@ def _build_trade_plan(
     cost_per_lot       = entry_mid * _LOT_SIZE * _COST_RATE
     total_risk_per_lot = price_risk_per_lot + cost_per_lot
     suggested_lots = max(1, int(_MAX_RISK_NTD / total_risk_per_lot)) if total_risk_per_lot > 0 else 1
-    # 上限 5 張（避免低價股暴增張數）
-    suggested_lots = min(suggested_lots, 5)
+    # 上限張數（避免低價股暴量超過資金部位）
+    suggested_lots = min(suggested_lots, _MAX_LOTS_PER_TRADE)
 
     return {
         "entry_low":      entry_low,

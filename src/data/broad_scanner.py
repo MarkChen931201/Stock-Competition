@@ -25,10 +25,10 @@ _HEADERS = {
     "Referer": "https://mis.twse.com.tw/",
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
 }
-_SCAN_INTERVAL = 300    # 5 分鐘掃一次
+_SCAN_INTERVAL = 120    # 2 分鐘掃一次（從 5 分鐘加快）
 _BATCH_SIZE    = 50     # 每批 50 檔
 _BATCH_DELAY   = 1.2    # 批次間隔秒數
-_TOP_N         = 30     # 每次篩出前 N 個異動股
+_TOP_N         = 50     # 每次篩出前 N 個異動股（從 30 擴大）
 
 
 class BroadScanner:

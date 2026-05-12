@@ -180,7 +180,7 @@ def build_signal_embed(
             name="📦 建議下單",
             value=(
                 f"**{action_word} {ex['suggested_lots']} 張**（{direction_word}）\n"
-                f"單筆風險上限 NT$5,000"
+                f"單筆風險上限 NT$100,000"
             ),
             inline=False,
         )
