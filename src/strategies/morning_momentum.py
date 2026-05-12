@@ -20,6 +20,7 @@ v2 改動：
 from __future__ import annotations
 
 from src.data.cache import IntraDayCache
+from src.risk.tick_utils import stop_loss_price, take_profit_price
 from src.signals.trend_score import calc_trend_score
 from src.strategies.base import BaseStrategy, Direction, Signal, SignalType
 
@@ -114,10 +115,10 @@ class MorningMomentumStrategy(BaseStrategy):
         )
 
         if long_cond:
-            stop_loss   = round(close * (1 - stop_loss_pct), 2)
+            stop_loss   = stop_loss_price(close * (1 - stop_loss_pct), is_long=True)
             R           = close - stop_loss
-            take_profit = round(close + profit_ratio * R, 2)
-            trail_tp    = round(close + trail_profit_r * R, 2)
+            take_profit = take_profit_price(close + profit_ratio * R, is_long=True)
+            trail_tp    = take_profit_price(close + trail_profit_r * R, is_long=True)
             self._fired[symbol].add(Direction.LONG)
             return Signal(
                 symbol=symbol, name=stock_name,
@@ -156,10 +157,10 @@ class MorningMomentumStrategy(BaseStrategy):
         )
 
         if short_cond:
-            stop_loss   = round(close * (1 + stop_loss_pct), 2)
+            stop_loss   = stop_loss_price(close * (1 + stop_loss_pct), is_long=False)
             R           = stop_loss - close
-            take_profit = round(close - profit_ratio * R, 2)
-            trail_tp    = round(close - trail_profit_r * R, 2)
+            take_profit = take_profit_price(close - profit_ratio * R, is_long=False)
+            trail_tp    = take_profit_price(close - trail_profit_r * R, is_long=False)
             self._fired[symbol].add(Direction.SHORT)
             return Signal(
                 symbol=symbol, name=stock_name,

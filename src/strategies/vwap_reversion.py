@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from src.data.cache import IntraDayCache
+from src.risk.tick_utils import snap_price, stop_loss_price, take_profit_price
 from src.strategies.base import BaseStrategy, Direction, Signal, SignalType
 
 
@@ -127,8 +128,8 @@ class VWAPReversionStrategy(BaseStrategy):
                 signal_type=SignalType.ENTRY,
                 trigger_price=bar.close,
                 strategy_name=self.name,
-                stop_loss=round(stop_lower, 2),
-                take_profit=round(vwap, 2),
+                stop_loss=stop_loss_price(stop_lower, is_long=True),
+                take_profit=take_profit_price(vwap, is_long=True),
                 reason=(
                     f"觸及 VWAP-{sigma}σ={lower_band:.2f}｜"
                     f"下影線｜量縮 {bar.volume/avg_vol:.1%}｜"
@@ -161,8 +162,8 @@ class VWAPReversionStrategy(BaseStrategy):
                 signal_type=SignalType.ENTRY,
                 trigger_price=bar.close,
                 strategy_name=self.name,
-                stop_loss=round(stop_upper, 2),
-                take_profit=round(vwap, 2),
+                stop_loss=stop_loss_price(stop_upper, is_long=False),
+                take_profit=take_profit_price(vwap, is_long=False),
                 reason=(
                     f"觸及 VWAP+{sigma}σ={upper_band:.2f}｜"
                     f"上影線｜量縮 {bar.volume/avg_vol:.1%}｜"

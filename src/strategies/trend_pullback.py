@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 from src.data.cache import IntraDayCache
+from src.risk.tick_utils import stop_loss_price, take_profit_price
 from src.signals.trend_score import calc_trend_score
 from src.strategies.base import BaseStrategy, Direction, Signal, SignalType
 
@@ -154,13 +155,13 @@ class TrendPullbackStrategy(BaseStrategy):
             bullish_bar = bar.close > bar.open
 
             if had_run and near_vwap and shallow_pullback and not_broken and vol_shrunk and bullish_bar:
-                # 停損：回踩低點 -0.3%
-                stop_loss = round(bar.low * 0.997, 2)
+                # 停損：回踩低點 -0.3%（向下取合法 tick）
+                stop_loss = stop_loss_price(bar.low * 0.997, is_long=True)
                 R = close - stop_loss
                 if R <= 0:
                     return None
-                # 停利：前波高點（保守）
-                take_profit = round(min(today_high * 1.005, close + 2 * R), 2)
+                # 停利：前波高點（向上取合法 tick）
+                take_profit = take_profit_price(min(today_high * 1.005, close + 2 * R), is_long=True)
 
                 fired.add(Direction.LONG)
                 return Signal(
@@ -205,11 +206,11 @@ class TrendPullbackStrategy(BaseStrategy):
             bearish_bar = bar.close < bar.open
 
             if had_run and near_vwap and shallow_rebound and not_broken and vol_shrunk and bearish_bar:
-                stop_loss = round(bar.high * 1.003, 2)
+                stop_loss = stop_loss_price(bar.high * 1.003, is_long=False)
                 R = stop_loss - close
                 if R <= 0:
                     return None
-                take_profit = round(max(today_low * 0.995, close - 2 * R), 2)
+                take_profit = take_profit_price(max(today_low * 0.995, close - 2 * R), is_long=False)
 
                 fired.add(Direction.SHORT)
                 return Signal(

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from src.data.cache import IntraDayCache
+from src.risk.tick_utils import snap_price, stop_loss_price, take_profit_price
 from src.strategies.base import BaseStrategy, Direction, Signal, SignalType
 
 
@@ -224,15 +225,15 @@ class ORBBreakoutStrategy(BaseStrategy):
         )
 
         if long_cond:
-            stop_loss = max(orb.midpoint, close * (1 - stop_loss_pct))
+            stop_loss = stop_loss_price(max(orb.midpoint, close * (1 - stop_loss_pct)), is_long=True)
             r = close - stop_loss
-            take_profit = round(close + profit_ratio * r, 2)
+            take_profit = take_profit_price(close + profit_ratio * r, is_long=True)
             self._fired[symbol].add(Direction.LONG)
             return Signal(
                 symbol=symbol, name=stock_name,
                 direction=Direction.LONG, signal_type=SignalType.ENTRY,
-                trigger_price=close, strategy_name=self.name,
-                stop_loss=round(stop_loss, 2), take_profit=take_profit,
+                trigger_price=snap_price(close), strategy_name=self.name,
+                stop_loss=stop_loss, take_profit=take_profit,
                 reason=(
                     f"突破 OR {orb.high}｜寬度 {orb_width_pct:.1%}｜"
                     f"量比 {current_vol/avg_orb_vol:.1f}x｜RSI={rsi}｜"
@@ -262,15 +263,15 @@ class ORBBreakoutStrategy(BaseStrategy):
         )
 
         if short_cond:
-            stop_loss = min(orb.midpoint, close * (1 + stop_loss_pct))
+            stop_loss = stop_loss_price(min(orb.midpoint, close * (1 + stop_loss_pct)), is_long=False)
             r = stop_loss - close
-            take_profit = round(close - profit_ratio * r, 2)
+            take_profit = take_profit_price(close - profit_ratio * r, is_long=False)
             self._fired[symbol].add(Direction.SHORT)
             return Signal(
                 symbol=symbol, name=stock_name,
                 direction=Direction.SHORT, signal_type=SignalType.ENTRY,
-                trigger_price=close, strategy_name=self.name,
-                stop_loss=round(stop_loss, 2), take_profit=take_profit,
+                trigger_price=snap_price(close), strategy_name=self.name,
+                stop_loss=stop_loss, take_profit=take_profit,
                 reason=(
                     f"跌破 OR {orb.low}｜寬度 {orb_width_pct:.1%}｜"
                     f"量比 {current_vol/avg_orb_vol:.1f}x｜RSI={rsi}｜"

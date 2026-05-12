@@ -15,6 +15,7 @@ from collections import defaultdict, deque
 
 from src.data.cache import IntraDayCache
 from src.data.twse_client import OrderBook
+from src.risk.tick_utils import ceil_price, floor_price, snap_price
 from src.strategies.base import BaseStrategy, Direction, Signal, SignalType
 
 # 交易計畫常數
@@ -51,47 +52,46 @@ def _build_trade_plan(
     close = last_bar.close
 
     if direction == Direction.LONG:
-        # 進場區間：買一 ~ 賣一 +0.5%（控制不追太高）
-        entry_low  = best_bid
-        entry_high = round(best_ask * (1 + _ENTRY_BAND), 2)
-        entry_mid  = (entry_low + entry_high) / 2
+        # 進場區間：買一 ~ 賣一 +0.5%（snap 到合法 tick）
+        entry_low  = snap_price(best_bid)
+        entry_high = ceil_price(best_ask * (1 + _ENTRY_BAND))
+        entry_mid  = snap_price((entry_low + entry_high) / 2)
 
-        # 停損：最近 N 根 bar 最低點 -0.3%
+        # 停損：最近 N 根 bar 最低點 -0.3%（向下取合法 tick）
         swing_low = min(b.low for b in recent_bars)
-        stop_loss = round(swing_low * (1 - _STOP_BUFFER), 2)
+        stop_loss = floor_price(swing_low * (1 - _STOP_BUFFER))
 
-        # 觸發價：突破最近高點 +0.1%（避免假突破）
+        # 觸發價：突破最近高點 +0.1%（向上 tick）
         swing_high = max(b.high for b in recent_bars)
-        trigger_break = round(swing_high * (1 + _TRIGGER_BREAK_PCT), 2)
+        trigger_break = ceil_price(swing_high * (1 + _TRIGGER_BREAK_PCT))
 
         # R = 進場 - 停損
         risk_per_share = entry_mid - stop_loss
         if risk_per_share <= 0:
-            # 異常：停損高於進場，退而求其次用 close * 1%
             risk_per_share = close * 0.01
-            stop_loss = round(entry_mid - risk_per_share, 2)
+            stop_loss = floor_price(entry_mid - risk_per_share)
 
-        tp1 = round(entry_mid + risk_per_share, 2)
-        tp2 = round(entry_mid + risk_per_share * 2, 2)
+        tp1 = ceil_price(entry_mid + risk_per_share)
+        tp2 = ceil_price(entry_mid + risk_per_share * 2)
     else:
         # 做空：進場區間 = 賣一 ~ 買一 -0.5%
-        entry_high = best_ask
-        entry_low  = round(best_bid * (1 - _ENTRY_BAND), 2)
-        entry_mid  = (entry_low + entry_high) / 2
+        entry_high = snap_price(best_ask)
+        entry_low  = floor_price(best_bid * (1 - _ENTRY_BAND))
+        entry_mid  = snap_price((entry_low + entry_high) / 2)
 
         swing_high = max(b.high for b in recent_bars)
-        stop_loss = round(swing_high * (1 + _STOP_BUFFER), 2)
+        stop_loss = ceil_price(swing_high * (1 + _STOP_BUFFER))
 
         swing_low = min(b.low for b in recent_bars)
-        trigger_break = round(swing_low * (1 - _TRIGGER_BREAK_PCT), 2)
+        trigger_break = floor_price(swing_low * (1 - _TRIGGER_BREAK_PCT))
 
         risk_per_share = stop_loss - entry_mid
         if risk_per_share <= 0:
             risk_per_share = close * 0.01
-            stop_loss = round(entry_mid + risk_per_share, 2)
+            stop_loss = ceil_price(entry_mid + risk_per_share)
 
-        tp1 = round(entry_mid - risk_per_share, 2)
-        tp2 = round(entry_mid - risk_per_share * 2, 2)
+        tp1 = floor_price(entry_mid - risk_per_share)
+        tp2 = floor_price(entry_mid - risk_per_share * 2)
 
     # 建議張數：單筆風險 NT$5,000 / 每張風險金額
     # 每張風險 = 價差風險 × 1000 股 + 交易成本（買進金額 × 0.5%）
