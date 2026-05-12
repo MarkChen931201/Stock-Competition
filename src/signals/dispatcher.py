@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from loguru import logger
 
+from src.data.cache import IntraDayCache
 from src.notifier.discord_bot import DiscordNotifier
 from src.notifier.embed_builder import build_signal_embed
 from src.risk.cost_calculator import AssetType, calc_round_trip_cost
@@ -21,6 +22,11 @@ from src.strategies.base import Signal, SignalType, Direction
 
 # 判斷是否為 ETF 的代號前綴 / 後綴（台股 ETF 代號通常以 0 開頭或含英文）
 _ETF_PREFIXES = ("00", "0050", "0056")
+
+# 流動性過濾門檻（過濾冷門股、窄幅股，例如葡萄王 1707）
+_MIN_TOTAL_VOLUME_LOTS   = 1000    # 今日累積總成交量 >= 1000 張
+_MIN_DAILY_AMPLITUDE_PCT = 0.012   # 當日振幅 >= 1.2%（過濾窄幅震盪）
+_MIN_RECENT_VOLUME_LOTS  = 30      # 最近 1 根 K 棒 >= 30 張（過濾現在沒人交易）
 
 
 def _infer_asset_type(symbol: str) -> AssetType:
@@ -48,6 +54,7 @@ class SignalDispatcher:
         default_lots: int = 1,
         trailing_stop_manager=None,
         signal_scorer: SignalScorer | None = None,
+        cache: IntraDayCache | None = None,
     ):
         self._notifier = notifier
         self._min_profit_pct = min_profit_pct
@@ -55,12 +62,14 @@ class SignalDispatcher:
         self._dedup = SignalDedup(cooldown_minutes=cooldown_minutes)
         self._trailing = trailing_stop_manager
         self._scorer = signal_scorer or SignalScorer()
+        self._cache = cache  # 用於流動性檢查
 
         # 統計：今日推播次數
         self._sent_count = 0
         self._rejected_cost = 0
         self._rejected_dedup = 0
         self._rejected_score = 0
+        self._rejected_liquidity = 0   # 流動性過濾
 
     def reset(self) -> None:
         """每日開盤前呼叫，重置去重狀態與統計。"""
@@ -69,6 +78,7 @@ class SignalDispatcher:
         self._rejected_cost = 0
         self._rejected_dedup = 0
         self._rejected_score = 0
+        self._rejected_liquidity = 0
 
     @property
     def stats(self) -> dict:
@@ -77,7 +87,41 @@ class SignalDispatcher:
             "rejected_cost": self._rejected_cost,
             "rejected_dedup": self._rejected_dedup,
             "rejected_score": self._rejected_score,
+            "rejected_liquidity": self._rejected_liquidity,
         }
+
+    def _check_liquidity(self, signal: Signal) -> tuple[bool, str]:
+        """檢查股票流動性與振幅，過濾冷門股 / 窄幅震盪股。
+
+        Returns:
+            (合格, 失敗原因)
+        """
+        if self._cache is None:
+            return True, ""  # 沒有 cache 無法判斷，放行
+
+        bars = self._cache.get_bars(signal.symbol)
+        if not bars:
+            return True, ""  # 沒資料無法判斷，放行（避免冤枉）
+
+        # 條件 1：今日累積總量
+        total_lots = sum(b.volume for b in bars)
+        if total_lots < _MIN_TOTAL_VOLUME_LOTS:
+            return False, f"累積量 {total_lots:,} 張 < {_MIN_TOTAL_VOLUME_LOTS} 張（冷門）"
+
+        # 條件 2：當日振幅（high - low / open）
+        if bars[0].open > 0:
+            today_high = max(b.high for b in bars)
+            today_low  = min(b.low for b in bars)
+            amplitude  = (today_high - today_low) / bars[0].open
+            if amplitude < _MIN_DAILY_AMPLITUDE_PCT:
+                return False, f"振幅 {amplitude:.2%} < {_MIN_DAILY_AMPLITUDE_PCT:.1%}（窄幅）"
+
+        # 條件 3：最近一根 K 棒成交量（避免冷門時段觸發）
+        last_bar_lots = bars[-1].volume
+        if last_bar_lots < _MIN_RECENT_VOLUME_LOTS:
+            return False, f"最新 K 棒量 {last_bar_lots} 張 < {_MIN_RECENT_VOLUME_LOTS} 張（無人交易）"
+
+        return True, ""
 
     def submit(self, signal: Signal, lots: int | None = None) -> bool:
         """提交一個訊號，經過驗證後推播。
@@ -91,6 +135,13 @@ class SignalDispatcher:
         """
         lots = lots or self._default_lots
         asset_type = _infer_asset_type(signal.symbol)
+
+        # --- Step 0: 流動性過濾（過濾葡萄王這類冷門股 / 窄幅股）---
+        ok, reason = self._check_liquidity(signal)
+        if not ok:
+            logger.info(f"[{signal.symbol}] REJECT（流動性）{reason}")
+            self._rejected_liquidity += 1
+            return False
 
         # --- Step 1: 計算交易成本 ---
         # WATCH 訊號只有觸發價，停利未知，用觸發價估算成本

@@ -136,6 +136,7 @@ class IntraDayScheduler:
             cooldown_minutes=5,
             trailing_stop_manager=self._trailing,
             signal_scorer=self._scorer,
+            cache=self.cache,  # v3 新增：流動性過濾需要
         )
         # 快速 OBI 輪詢（前 20 核心股，每 8 秒）— 平衡型擴大
         # 20 檔 × 1s/檔 + 8s 等待 = 28s/輪 → ~43 req/min（仍安全）
