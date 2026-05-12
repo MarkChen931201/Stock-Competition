@@ -1,41 +1,42 @@
-"""策略 D：早盤動能追蹤（Morning Momentum）。
+"""策略 D：早盤動能追蹤（Morning Momentum v2）。
 
-邏輯：
-  9:30 後觀察：若個股已上漲 > momentum_pct（預設 2%），
-  且成交量創今日新高，則追趨勢方向進場。
-
-  這個策略補足 ORB 的盲點：
-  - ORB 只捕捉「突破開盤區間」的行情
-  - 有些股票開盤就一路飆，早就脫離 ORB 太遠
-  - 動能策略可以在確認趨勢後加入
+v2 改動：
+  - 進場時點：09:30 → 09:15（OR 鎖定就動，搶開盤動量）
+  - 漲幅門檻：2% → 1.2%（不再等到漲完才追）
+  - 連續 K 棒：3 → 2（早一根進場，搭配加速度確認）
+  - 新增「動量加速度」過濾：必須加速中（避免追在動能尾聲）
+  - 新增「趨勢分數」過濾：trend_score >= 5 才進
+  - 停利：1R → 1.5R 主目標 + 3R 追蹤目標（動能行情拉得更遠）
 
 進場條件（多單，空單對稱）：
-  1. 09:30 之後（等趨勢確認）
-  2. 開盤至今漲幅 > momentum_pct（預設 2%）
-  3. 近 3 根 bar 連續收紅（確認動能持續）
-  4. 當根成交量 > 今日均量 × vol_ratio（爆量確認）
-  5. 大盤同向（順勢）
-
-停損：進場價 × (1 - atr_stop_mult × 當日 ATR%)
-停利：進場價 + 2R（動能行情給更大空間）
+  1. 09:15 之後（OR 鎖定）+ 11:00 前（早盤動能視窗）
+  2. 開盤至今漲幅 ≥ momentum_pct（預設 1.2%）
+  3. 近 2 根 bar 連續收紅
+  4. 加速度 > 0（漲速沒減慢）
+  5. 當根成交量 > 今日均量 × vol_ratio（爆量確認）
+  6. 大盤同向（順勢）
+  7. TrendScore >= 5（趨勢已成形）
 """
 from __future__ import annotations
 
 from src.data.cache import IntraDayCache
+from src.signals.trend_score import calc_trend_score
 from src.strategies.base import BaseStrategy, Direction, Signal, SignalType
 
 
 class MorningMomentumStrategy(BaseStrategy):
     """早盤動能追蹤策略。
 
-    預設參數：
-        momentum_pct    float  開盤至今漲幅門檻          預設 0.02 (2%)
+    預設參數（v2 強化）：
+        momentum_pct    float  開盤至今漲幅門檻          預設 0.012 (1.2%) ✨
         vol_ratio       float  當根量 / 今日均量          預設 1.5
-        consec_bars     int    連續同向 bar 數量          預設 3
+        consec_bars     int    連續同向 bar 數量          預設 2 ✨
         stop_loss_pct   float  停損比例                  預設 0.01 (1%)
-        profit_ratio    float  停利倍數                  預設 2.0
-        start_minute    int    最早幾分鐘後才進場         預設 30（09:30）
-        end_minute      int    最晚幾分鐘後停止進場       預設 90（10:30）
+        profit_ratio    float  主停利倍數                預設 1.5 ✨
+        trail_profit_r  float  追蹤停利倍數              預設 3.0 ✨
+        start_minute    int    最早幾分鐘後才進場         預設 15（09:15）✨
+        end_minute      int    最晚幾分鐘後停止進場       預設 120（11:00）✨
+        min_trend_score float  趨勢分數門檻              預設 5.0 ✨
         market_symbol   str    大盤代號                  預設 "TAIEX"
     """
 
@@ -53,11 +54,11 @@ class MorningMomentumStrategy(BaseStrategy):
         if bar is None:
             return None
 
-        # ── 時段限制 ──
+        # ── 時段限制（v2：09:15 ~ 11:00）──
         t = bar.timestamp
-        open_minutes = (t.hour - 9) * 60 + t.minute  # 距開盤分鐘數
-        start_min = self._param("start_minute", 30)
-        end_min   = self._param("end_minute", 90)
+        open_minutes = (t.hour - 9) * 60 + t.minute
+        start_min = self._param("start_minute", 15)   # v2: 30 → 15
+        end_min   = self._param("end_minute", 120)    # v2: 90 → 120
         if not (start_min <= open_minutes <= end_min):
             return None
 
@@ -65,13 +66,15 @@ class MorningMomentumStrategy(BaseStrategy):
         if len(all_bars) < 5:
             return None
 
-        # ── 讀取參數 ──
-        momentum_pct:  float = self._param("momentum_pct", 0.02)
-        vol_ratio:     float = self._param("vol_ratio", 1.5)
-        consec_bars:   int   = self._param("consec_bars", 3)
-        stop_loss_pct: float = self._param("stop_loss_pct", 0.01)
-        profit_ratio:  float = self._param("profit_ratio", 2.0)
-        market_symbol: str   = self._param("market_symbol", "TAIEX")
+        # ── 讀取參數（v2 調整門檻）──
+        momentum_pct:    float = self._param("momentum_pct", 0.012)   # v2: 0.02 → 0.012
+        vol_ratio:       float = self._param("vol_ratio", 1.5)
+        consec_bars:     int   = self._param("consec_bars", 2)         # v2: 3 → 2
+        stop_loss_pct:   float = self._param("stop_loss_pct", 0.01)
+        profit_ratio:    float = self._param("profit_ratio", 1.5)      # v2: 2.0 → 1.5
+        trail_profit_r:  float = self._param("trail_profit_r", 3.0)    # 新增
+        min_trend_score: float = self._param("min_trend_score", 5.0)   # 新增
+        market_symbol:   str   = self._param("market_symbol", "TAIEX")
 
         close      = bar.close
         first_open = all_bars[0].open if all_bars[0].open else close
@@ -95,19 +98,26 @@ class MorningMomentumStrategy(BaseStrategy):
 
         fired_directions = self._fired.setdefault(symbol, set())
 
-        # ===== 多單：今日漲幅 > 2%，連續紅 K，爆量，大盤正向 =====
+        # ── 趨勢分數計算（多空各算一次）──
+        trend_long  = calc_trend_score(self.cache, symbol, Direction.LONG)
+        trend_short = calc_trend_score(self.cache, symbol, Direction.SHORT)
+
+        # ===== 多單（v2 強化條件）=====
         long_cond = (
             change_pct >= momentum_pct
             and all_up
             and bar.volume >= avg_vol * vol_ratio
             and mkt_change >= 0
+            and trend_long.score >= min_trend_score       # v2: 趨勢分數過濾
+            and trend_long.acceleration >= 0              # v2: 加速度確認（沒減速）
             and Direction.LONG not in fired_directions
         )
 
         if long_cond:
-            stop_loss  = round(close * (1 - stop_loss_pct), 2)
-            R          = close - stop_loss
+            stop_loss   = round(close * (1 - stop_loss_pct), 2)
+            R           = close - stop_loss
             take_profit = round(close + profit_ratio * R, 2)
+            trail_tp    = round(close + trail_profit_r * R, 2)
             self._fired[symbol].add(Direction.LONG)
             return Signal(
                 symbol=symbol, name=stock_name,
@@ -116,30 +126,40 @@ class MorningMomentumStrategy(BaseStrategy):
                 stop_loss=stop_loss, take_profit=take_profit,
                 reason=(
                     f"早盤漲幅 {change_pct:+.2%}｜"
-                    f"連續 {consec_bars} 根紅K｜"
+                    f"連 {consec_bars} 根紅K｜"
                     f"量比 {bar.volume/avg_vol:.1f}x｜"
+                    f"加速度 {trend_long.acceleration:+.2f}%｜"
+                    f"趨勢分 {trend_long.score:.1f}/10｜"
                     f"大盤 {mkt_change:+.2%}"
                 ),
                 extra={
                     "change_pct": round(change_pct * 100, 2),
                     "vol_ratio":  round(bar.volume / avg_vol, 2),
                     "mkt_change": round(mkt_change * 100, 2),
+                    "trend_score": round(trend_long.score, 1),
+                    "trend_breakdown": trend_long.breakdown,
+                    "acceleration": trend_long.acceleration,
+                    "vwap_position_pct": trend_long.vwap_position_pct,
+                    "trail_take_profit": trail_tp,
                 },
             )
 
-        # ===== 空單：今日跌幅 > 2%，連續黑 K，爆量，大盤負向 =====
+        # ===== 空單（v2 強化條件）=====
         short_cond = (
             change_pct <= -momentum_pct
             and all_down
             and bar.volume >= avg_vol * vol_ratio
             and mkt_change <= 0
+            and trend_short.score >= min_trend_score
+            and trend_short.acceleration <= 0             # 空單：加速度為負（跌得越來越快）
             and Direction.SHORT not in fired_directions
         )
 
         if short_cond:
-            stop_loss  = round(close * (1 + stop_loss_pct), 2)
-            R          = stop_loss - close
+            stop_loss   = round(close * (1 + stop_loss_pct), 2)
+            R           = stop_loss - close
             take_profit = round(close - profit_ratio * R, 2)
+            trail_tp    = round(close - trail_profit_r * R, 2)
             self._fired[symbol].add(Direction.SHORT)
             return Signal(
                 symbol=symbol, name=stock_name,
@@ -148,14 +168,21 @@ class MorningMomentumStrategy(BaseStrategy):
                 stop_loss=stop_loss, take_profit=take_profit,
                 reason=(
                     f"早盤跌幅 {change_pct:+.2%}｜"
-                    f"連續 {consec_bars} 根黑K｜"
+                    f"連 {consec_bars} 根黑K｜"
                     f"量比 {bar.volume/avg_vol:.1f}x｜"
+                    f"加速度 {trend_short.acceleration:+.2f}%｜"
+                    f"趨勢分 {trend_short.score:.1f}/10｜"
                     f"大盤 {mkt_change:+.2%}"
                 ),
                 extra={
                     "change_pct": round(change_pct * 100, 2),
                     "vol_ratio":  round(bar.volume / avg_vol, 2),
                     "mkt_change": round(mkt_change * 100, 2),
+                    "trend_score": round(trend_short.score, 1),
+                    "trend_breakdown": trend_short.breakdown,
+                    "acceleration": trend_short.acceleration,
+                    "vwap_position_pct": trend_short.vwap_position_pct,
+                    "trail_take_profit": trail_tp,
                 },
             )
 

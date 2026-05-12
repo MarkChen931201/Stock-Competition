@@ -62,9 +62,12 @@ class ORBBreakoutStrategy(BaseStrategy):
     def __init__(self, cache: IntraDayCache, params: dict | None = None):
         super().__init__(cache, params)
         self._fired: dict[str, set[Direction]] = {}
+        # WATCH 預警去重：每個方向只發一次預警
+        self._fired_watch: dict[str, set[Direction]] = {}
 
     def reset(self) -> None:
         self._fired.clear()
+        self._fired_watch.clear()
 
     def generate_signal(self, symbol: str, stock_name: str) -> Signal | None:
         orb = self.cache.get_orb(symbol)
@@ -143,6 +146,70 @@ class ORBBreakoutStrategy(BaseStrategy):
         uptick = book.uptick_ratio if book else 0.5
         uptick_long_min:  float = self._param("uptick_long_min", 0.47)
         uptick_short_max: float = self._param("uptick_short_max", 0.53)
+
+        # ── 新增：即將突破 WATCH 預警（早一步告知）──
+        approach_pct: float = self._param("approach_pct", 0.003)
+        watch_directions = self._fired_watch.setdefault(symbol, set())
+
+        # 多單「即將突破」
+        if (
+            allow_long
+            and close < orb.high
+            and (orb.high - close) / orb.high <= approach_pct
+            and current_vol >= avg_orb_vol * 1.2
+            and uptick >= uptick_long_min
+            and Direction.LONG not in fired_directions
+            and Direction.LONG not in watch_directions
+        ):
+            watch_directions.add(Direction.LONG)
+            return Signal(
+                symbol=symbol, name=stock_name,
+                direction=Direction.LONG, signal_type=SignalType.WATCH,
+                trigger_price=close, strategy_name=self.name + "（預警）",
+                stop_loss=round(max(orb.midpoint, close * (1 - stop_loss_pct)), 2),
+                take_profit=round(close + profit_ratio * (close - orb.midpoint), 2),
+                reason=(
+                    f"🔔 即將突破 OR 高 {orb.high}（差 {(orb.high-close)/orb.high:.2%}）｜"
+                    f"量比 {current_vol/avg_orb_vol:.1f}x｜"
+                    f"外盤比 {uptick:.1%}｜大盤 {mkt_change:+.2%}"
+                ),
+                extra={
+                    "orb_high": orb.high, "orb_low": orb.low,
+                    "orb_width_pct": round(orb_width_pct * 100, 2),
+                    "approach_pct": round((orb.high - close) / orb.high * 100, 2),
+                    "uptick_ratio": round(uptick * 100, 1),
+                },
+            )
+
+        # 空單「即將跌破」
+        if (
+            allow_short
+            and close > orb.low
+            and (close - orb.low) / orb.low <= approach_pct
+            and current_vol >= avg_orb_vol * 1.2
+            and uptick <= uptick_short_max
+            and Direction.SHORT not in fired_directions
+            and Direction.SHORT not in watch_directions
+        ):
+            watch_directions.add(Direction.SHORT)
+            return Signal(
+                symbol=symbol, name=stock_name,
+                direction=Direction.SHORT, signal_type=SignalType.WATCH,
+                trigger_price=close, strategy_name=self.name + "（預警）",
+                stop_loss=round(min(orb.midpoint, close * (1 + stop_loss_pct)), 2),
+                take_profit=round(close - profit_ratio * (orb.midpoint - close), 2),
+                reason=(
+                    f"🔔 即將跌破 OR 低 {orb.low}（差 {(close-orb.low)/orb.low:.2%}）｜"
+                    f"量比 {current_vol/avg_orb_vol:.1f}x｜"
+                    f"外盤比 {uptick:.1%}｜大盤 {mkt_change:+.2%}"
+                ),
+                extra={
+                    "orb_high": orb.high, "orb_low": orb.low,
+                    "orb_width_pct": round(orb_width_pct * 100, 2),
+                    "approach_pct": round((close - orb.low) / orb.low * 100, 2),
+                    "uptick_ratio": round(uptick * 100, 1),
+                },
+            )
 
         # ===== 多單條件 =====
         long_cond = (

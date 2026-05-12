@@ -1,20 +1,22 @@
-"""訊號品質評分器 — 多維度評估每個訊號，過濾低分訊號。
+"""訊號品質評分器 v3 — 多維度評估每個訊號，過濾低分訊號。
 
-評分維度（滿分 14 分）：
+評分維度（滿分 16 分）：
   1. 籌碼面（外資+投信方向）  ：0~2 分
   2. ORB 寬度                ：0~2 分（越寬越好）
   3. 量比                    ：0~2 分（越大越好）
   4. 大盤順向                ：0~2 分（同向加分）
   5. 時段                    ：0~2 分（早盤最高分）
-  6. 內外盤比（uptick ratio）：0~2 分 ✨新增
-  7. 加權 OBI（買賣壓力）    ：0~2 分 ✨新增
+  6. 內外盤比（uptick ratio）：0~2 分
+  7. 加權 OBI（買賣壓力）    ：0~2 分
+  8. 趨勢分數（v3 新增）     ：0~2 分（壓縮 trend_score 10 分至 2 分）
 
-  評分 ≥ min_score（預設 6.0 / 14）才推播，低分直接 REJECT。
+  評分 ≥ min_score（預設 7.0 / 16）才推播，低分直接 REJECT。
 
-優先順序原則：
-  - 籌碼、量比、內外盤比 = 「實際成交方向」最重要
-  - ORB 寬度、大盤順向、時段 = 「背景條件」中等重要
-  - 加權 OBI = 「即將成交方向」次要
+v3 新增：趨勢分數維度
+  - 來源：trend_score.calc_trend_score (滿分 10)
+  - 壓縮：trend_score / 10 × 2 = 0~2 分
+  - 趨勢分數涵蓋 VWAP/EMA/ROC/加速度/連續K
+  - 訊號評分 + 趨勢分數雙重把關，避免逆勢進場
 
 OrderBook 資料由 dispatcher 在 submit 時注入（透過 cache）。
 """
@@ -32,14 +34,14 @@ class SignalScorer:
 
     Args:
         inst_loader:  InstitutionalLoader 實例（無法取得時可傳 None）
-        min_score:    最低推播門檻（滿分 14，預設 6.0）
-        cache:        IntraDayCache 實例（用於讀取 OrderBook，可選）
+        min_score:    最低推播門檻（滿分 16，預設 7.0）
+        cache:        IntraDayCache 實例（用於讀取 OrderBook + 趨勢分數）
     """
 
     def __init__(
         self,
         inst_loader: "InstitutionalLoader | None" = None,
-        min_score: float = 6.0,
+        min_score: float = 7.0,
         cache=None,
     ):
         self._inst = inst_loader
@@ -149,6 +151,29 @@ class SignalScorer:
             elif w_obi <= -0.15 or blr <= 0.45: obi_score = 1.0
             elif w_obi <= 0:                    obi_score = 0.5
         breakdown["加權OBI"] = obi_score
+
+        # ── 8. 趨勢分數（0~2 分）── ✨v3 新增
+        # 用 trend_score 引擎計算（滿分 10），再壓縮成 0~2 分
+        trend_score_10 = 0.0
+        if self._cache is not None:
+            try:
+                from src.signals.trend_score import calc_trend_score
+                trend = calc_trend_score(self._cache, signal.symbol, signal.direction)
+                trend_score_10 = trend.score
+                # 把趨勢明細存入 signal.extra，供 embed 顯示
+                if signal.extra is None:
+                    signal.extra = {}
+                signal.extra.setdefault("trend_score", round(trend.score, 1))
+                signal.extra.setdefault("trend_breakdown", trend.breakdown)
+                signal.extra.setdefault("vwap_position_pct", trend.vwap_position_pct)
+                signal.extra.setdefault("acceleration_pct", trend.acceleration)
+            except Exception:
+                trend_score_10 = 0.0
+
+        # 壓縮 0~10 → 0~2（線性映射）
+        trend_score_2 = round(trend_score_10 / 5.0, 1)   # 10/5=2, 5/5=1
+        trend_score_2 = min(2.0, max(0.0, trend_score_2))
+        breakdown["趨勢"] = trend_score_2
 
         total = sum(breakdown.values())
         return total, breakdown

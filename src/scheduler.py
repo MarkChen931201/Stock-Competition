@@ -35,6 +35,7 @@ from src.strategies.orderbook_imbalance import OBIBurstStrategy
 from src.strategies.orb_breakout import ORBBreakoutStrategy
 from src.strategies.vwap_reversion import VWAPReversionStrategy
 from src.strategies.morning_momentum import MorningMomentumStrategy
+from src.strategies.trend_pullback import TrendPullbackStrategy
 
 # 盤中訊號接收截止時間（分鐘），13:20 後不再發訊號
 _SIGNAL_CUTOFF_HOUR = 13
@@ -126,8 +127,9 @@ class IntraDayScheduler:
         self._trailing = TrailingStopManager(notifier=self._notifier)
         # 籌碼面資料（盤前載入昨日）
         self._inst = InstitutionalLoader(token=settings.finmind_token)
-        # 評分系統升級至 7 維度滿分 14，門檻 6.0（約 43%）
-        self._scorer = SignalScorer(inst_loader=self._inst, min_score=6.0, cache=self.cache)
+        # 評分系統 v3：8 維度滿分 16，門檻 7.0（約 44%）
+        # 新增第 8 維「趨勢分數」，需要 cache 才能計算
+        self._scorer = SignalScorer(inst_loader=self._inst, min_score=7.0, cache=self.cache)
         self._dispatcher = SignalDispatcher(
             notifier=self._notifier,
             min_profit_pct=0.008,
@@ -141,11 +143,12 @@ class IntraDayScheduler:
             api_key=settings.fugle_api_key, poll_interval=8.0
         )
 
-        # --- 四個策略（共享同一個 cache）---
-        self._orb  = ORBBreakoutStrategy(self.cache)
-        self._vwap = VWAPReversionStrategy(self.cache)
-        self._obi  = OBIBurstStrategy(self.cache)
-        self._mom  = MorningMomentumStrategy(self.cache)
+        # --- 五個策略（共享同一個 cache）---
+        self._orb      = ORBBreakoutStrategy(self.cache)
+        self._vwap     = VWAPReversionStrategy(self.cache)
+        self._obi      = OBIBurstStrategy(self.cache)
+        self._mom      = MorningMomentumStrategy(self.cache)
+        self._pullback = TrendPullbackStrategy(self.cache)   # v3 新增：趨勢回踩
 
         # 防止收盤後繼續發訊號
         self._signal_stopped = False
@@ -201,6 +204,7 @@ class IntraDayScheduler:
         self._vwap.reset()
         self._obi.reset()
         self._mom.reset()
+        self._pullback.reset()                                # v3 新增
         self._dispatcher.reset()
         self._signal_stopped = False
 
@@ -263,8 +267,8 @@ class IntraDayScheduler:
         symbol = bar.symbol
         name = self.name_map.get(symbol, symbol)
 
-        # 依序呼叫四個策略
-        for strategy in (self._orb, self._vwap, self._obi, self._mom):
+        # 依序呼叫五個策略
+        for strategy in (self._orb, self._vwap, self._obi, self._mom, self._pullback):
             try:
                 signal = strategy.generate_signal(symbol, name)
                 if signal:

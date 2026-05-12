@@ -62,10 +62,10 @@ def build_signal_embed(
     if score is not None:
         breakdown = signal.extra.get("score_breakdown", {})
         breakdown_str = "  ".join(f"{k}:{v}" for k, v in breakdown.items())
-        # 滿分 14，每 2 分一顆星
+        # 滿分 16（v3 新增趨勢維度），每 2 分一顆星
         stars = "⭐" * int(score / 2)
         embed.add_embed_field(
-            name=f"🎯 訊號評分  {stars}  {score}/14",
+            name=f"🎯 訊號評分  {stars}  {score}/16",
             value=f"`{breakdown_str}`",
             inline=False,
         )
